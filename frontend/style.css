@@ -117,3 +117,69 @@ select {
 
 /* the "hidden" attribute must win over display:flex above */
 [hidden] { display: none !important; }
+
+/* ---------- user switcher ---------- */
+.profile-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+
+.profile-label { font-weight: bold; }
+
+.profile-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.profile-buttons button.active {
+  background: #0a7a4f;
+  border-color: #0a7a4f;
+  color: #fff;
+  font-weight: bold;
+}
+
+button.danger {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+button.danger:hover { background: #fdecea; }
+
+/* ---------- add user panel ---------- */
+.add-user {
+  margin-top: 12px;
+  max-width: 560px;
+}
+
+.add-user input[type="text"] {
+  padding: 6px;
+  width: 260px;
+  margin-bottom: 8px;
+}
+
+.add-user fieldset {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  margin: 8px 0;
+}
+
+.add-user fieldset label {
+  display: block;
+  margin: 4px 0;
+}
+
+.consent {
+  display: block;
+  margin: 10px 0;
+  padding: 8px;
+  background: #fff8e1;
+  border: 1px solid #f0d58a;
+  border-radius: 6px;
+}

@@ -172,7 +172,7 @@ document.getElementById("startCamBtn").onclick = async () => {
 window.__revoiceLoaded = true;
 trackStatusEl.textContent = "Ready. Click Start Camera.";
 refreshSuggestions();        // show starter phrases straight away
-updateVoiceBankStatus();     // show how many clips are banked
+// (users + voice bank are loaded at the very end of this file)
 
 // ---------- MAIN LOOP ----------
 function loop() {
@@ -404,19 +404,201 @@ document.getElementById("clearBtn").onclick = () => {
   refreshSuggestions();
 };
 
+// ---------- USER PROFILES ----------
+// Each user has their own saved voice (recordings) or a stock voice.
+// These controls are for the CAREGIVER, so mouse-only is fine here.
+let profiles = [];
+let activeProfile = null;     // the selected user, or null if there are none
+
+async function loadProfiles() {
+  try {
+    const res = await fetch("/profiles");
+    const data = await res.json();
+    profiles = data.profiles || [];
+    activeProfile = profiles.find((p) => p.id === data.active) || null;
+  } catch (err) {
+    console.error("could not load users", err);
+    document.getElementById("profileStatus").textContent = "Could not load users — is the backend running?";
+    return;
+  }
+  renderProfiles();
+  // first run: no users yet, so open the "Add user" panel straight away
+  if (profiles.length === 0) openAddUserPanel();
+}
+
+function renderProfiles() {
+  // one button per user, so switching during a demo is a single click
+  const box = document.getElementById("profileButtons");
+  box.innerHTML = "";
+  for (const p of profiles) {
+    const btn = document.createElement("button");
+    btn.textContent = p.name + (p.voice_type === "stock" ? " (stock voice)" : "");
+    if (activeProfile && p.id === activeProfile.id) btn.classList.add("active");
+    btn.onclick = () => selectProfile(p.id);
+    box.appendChild(btn);
+  }
+
+  document.getElementById("deleteUserBtn").hidden = !activeProfile;
+  document.getElementById("profileStatus").textContent =
+    profiles.length === 0 ? "No users yet — add one to start." : "";
+
+  applyProfileToVoiceControls();
+}
+
+// Stock-voice users have nothing to record and can only use XTTS.
+function applyProfileToVoiceControls() {
+  const isStock = activeProfile?.voice_type === "stock";
+  const stockNote = document.getElementById("stockNote");
+
+  document.getElementById("recordControls").hidden = isStock;
+  stockNote.hidden = !isStock;
+  if (isStock) {
+    stockNote.textContent =
+      `${activeProfile.name} uses the stock voice "${activeProfile.stock_speaker}". ` +
+      "No recording needed. The emotion still changes the speaking style.";
+  }
+
+  const engineEl = document.getElementById("engine");
+  for (const opt of engineEl.options) opt.disabled = isStock && opt.value !== "xtts";
+  if (isStock) engineEl.value = "xtts";
+
+  updateVoiceBankStatus();
+}
+
+async function selectProfile(id) {
+  const res = await fetch(`/profiles/${encodeURIComponent(id)}/select`, { method: "POST" });
+  if (!res.ok) {
+    document.getElementById("profileStatus").textContent = "Could not switch user.";
+    return loadProfiles();
+  }
+  activeProfile = await res.json();
+  profiles = profiles.map((p) => (p.id === id ? activeProfile : p));
+  renderProfiles();
+}
+
+document.getElementById("deleteUserBtn").onclick = async () => {
+  if (!activeProfile) return;
+  const name = activeProfile.name;
+  const ok = confirm(
+    `Delete "${name}" and ALL of their voice recordings?\n\nThis cannot be undone.`);
+  if (!ok) return;
+
+  const res = await fetch(`/profiles/${encodeURIComponent(activeProfile.id)}`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({}));
+  const statusEl = document.getElementById("profileStatus");
+  await loadProfiles();
+  if (!res.ok) {
+    statusEl.textContent = "Delete failed: " + (data.error || res.status);
+    return;
+  }
+  statusEl.textContent = data.colab_cache_cleared
+    ? `Deleted "${name}" and their recordings. Colab has forgotten the voice too.`
+    : `Deleted "${name}" and their recordings. (Colab was offline; its copy disappears when it restarts.)`;
+};
+
+// ---------- ADD USER PANEL ----------
+const addUserPanel = document.getElementById("addUserPanel");
+
+function chosenVoiceType() {
+  return document.querySelector('input[name="voiceType"]:checked').value;
+}
+
+function updateAddUserForm() {
+  const stock = chosenVoiceType() === "stock";
+  document.getElementById("stockRow").hidden = !stock;
+  // consent is about copying someone's real voice, so only needed for cloning
+  document.getElementById("consentRow").hidden = stock;
+}
+
+async function loadStockSpeakers() {
+  const select = document.getElementById("stockSpeaker");
+  if (select.options.length) return;          // already loaded
+  const createBtn = document.getElementById("createUserBtn");
+  createBtn.disabled = true;                  // can't create until there's a voice to pick
+  document.getElementById("stockSource").textContent = "loading voices...";
+  try {
+    const res = await fetch("/stock_speakers");
+    const data = await res.json();
+    for (const name of data.speakers) select.add(new Option(name, name));
+    document.getElementById("stockSource").textContent =
+      data.source === "colab" ? "" : "(Colab offline — showing a short default list)";
+  } catch (err) {
+    document.getElementById("stockSource").textContent = "Could not load stock voices.";
+  } finally {
+    createBtn.disabled = false;
+  }
+}
+
+function openAddUserPanel() {
+  addUserPanel.hidden = false;
+  document.getElementById("addUserStatus").textContent = "";
+  updateAddUserForm();
+  document.getElementById("newName").focus();
+}
+
+document.getElementById("addUserBtn").onclick = openAddUserPanel;
+document.getElementById("cancelAddBtn").onclick = () => { addUserPanel.hidden = true; };
+for (const radio of document.querySelectorAll('input[name="voiceType"]')) {
+  radio.onchange = () => {
+    updateAddUserForm();
+    if (chosenVoiceType() === "stock") loadStockSpeakers();
+  };
+}
+
+document.getElementById("createUserBtn").onclick = async () => {
+  const statusEl = document.getElementById("addUserStatus");
+  const name = document.getElementById("newName").value.trim();
+  const voiceType = chosenVoiceType();
+  const consent = document.getElementById("consent").checked;
+
+  // quick checks here; the backend checks again (it has the final say)
+  if (!name) { statusEl.textContent = "Please enter a name."; return; }
+  if (voiceType === "cloned" && !consent) {
+    statusEl.textContent = "Please tick the consent box before cloning a voice.";
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("name", name);
+  formData.append("voice_type", voiceType);
+  formData.append("stock_speaker", voiceType === "stock" ? document.getElementById("stockSpeaker").value : "");
+  formData.append("consent_given", voiceType === "cloned" && consent ? "true" : "false");
+
+  const res = await fetch("/profiles", { method: "POST", body: formData });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    statusEl.textContent = "Error: " + (data.error || res.status);
+    return;
+  }
+
+  // reset the form for next time, close it, and show the new (selected) user
+  document.getElementById("newName").value = "";
+  document.getElementById("consent").checked = false;
+  addUserPanel.hidden = true;
+  await loadProfiles();
+  document.getElementById("profileStatus").textContent =
+    voiceType === "cloned" ? `Added ${name}. Now record a voice clip for each emotion.` : `Added ${name}.`;
+};
+
 // ---------- VOICE BANK RECORDING ----------
 const RECORD_SECONDS = 20;   // longer clips = more accurate voice cloning
 let activeRecorder = null;   // so a second click can stop recording early
 
 async function updateVoiceBankStatus() {
+  const statusEl = document.getElementById("recordStatus");
+  if (!activeProfile) {
+    statusEl.textContent = "Add a user first.";
+    return;
+  }
+  if (activeProfile.voice_type === "stock") return;
   try {
-    const res = await fetch("/voice_bank");
+    const res = await fetch(`/voice_bank?profile_id=${encodeURIComponent(activeProfile.id)}`);
     const counts = await res.json();
     const emotion = document.getElementById("emotion").value;
     const n = counts[emotion] || 0;
-    document.getElementById("recordStatus").textContent =
-      n === 0 ? "No clips yet for this emotion."
-              : `${n} clip(s) saved for "${emotion}". 2-3 gives the best result.`;
+    statusEl.textContent =
+      n === 0 ? `No clips yet for "${emotion}" (${activeProfile.name}).`
+              : `${n} clip(s) saved for "${emotion}" (${activeProfile.name}). 2-3 gives the best result.`;
   } catch (err) { /* ignore */ }
 }
 
@@ -433,6 +615,12 @@ document.getElementById("recordBtn").onclick = async () => {
   }
 
   const emotion = document.getElementById("emotion").value;
+  if (!activeProfile) {
+    statusEl.textContent = "Add a user first.";
+    return;
+  }
+  // remember WHO we're recording now, in case the user is switched mid-recording
+  const profileId = activeProfile.id;
 
   // turn OFF browser "improvements" — they distort the voice and hurt cloning
   const stream = await navigator.mediaDevices.getUserMedia({
@@ -465,11 +653,16 @@ document.getElementById("recordBtn").onclick = async () => {
     const blob = new Blob(chunks, { type: "audio/webm" });
     const formData = new FormData();
     formData.append("emotion", emotion);
+    formData.append("profile_id", profileId);
     formData.append("file", blob, "clip.webm");
 
     statusEl.textContent = "Uploading...";
     const res = await fetch("/upload_voice_clip", { method: "POST", body: formData });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      statusEl.textContent = "Upload failed: " + (data.error || res.status);
+      return;
+    }
     statusEl.textContent =
       `Saved ${seconds.toFixed(0)}s clip. ${data.clips} clip(s) for "${data.emotion}". 2-3 gives the best result.`;
   };
@@ -497,6 +690,7 @@ async function requestSpeech(engine, text, emotion) {
   formData.append("text", text);
   formData.append("emotion", emotion);
   formData.append("engine", engine);
+  if (activeProfile) formData.append("profile_id", activeProfile.id);
 
   const start = performance.now();
   const res = await fetch("/speak", { method: "POST", body: formData });
@@ -576,3 +770,7 @@ document.getElementById("speakBtn").onclick = async () => {
   }
 };
 
+
+// ---------- START ----------
+// Runs last, so everything above is defined before we load the users.
+loadProfiles();

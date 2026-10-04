@@ -10,6 +10,48 @@
   <h1>ReVoice</h1>
   <p class="subtitle">Head-controlled laser input &rarr; GenAI composition &rarr; cloned voice output</p>
 
+  <!-- USER SWITCHER (caregiver uses the mouse here) -->
+  <div class="profile-bar">
+    <span class="profile-label">User:</span>
+    <div id="profileButtons" class="profile-buttons"></div>
+    <button id="addUserBtn">+ Add user</button>
+    <button id="deleteUserBtn" class="danger" hidden>Delete user</button>
+    <span id="profileStatus" class="hint"></span>
+  </div>
+
+  <!-- ADD USER PANEL -->
+  <div id="addUserPanel" class="panel add-user" hidden>
+    <h2>Add user</h2>
+    <label for="newName">Name:</label>
+    <input id="newName" type="text" maxlength="60" placeholder="e.g. Mr Sharma" />
+
+    <fieldset>
+      <legend>Voice</legend>
+      <label><input type="radio" name="voiceType" value="cloned" checked />
+        Record my voice (clone it)</label>
+      <label><input type="radio" name="voiceType" value="stock" />
+        Use a stock voice (for someone with no healthy voice left to record)</label>
+    </fieldset>
+
+    <div id="stockRow" hidden>
+      <label for="stockSpeaker">Stock voice:</label>
+      <select id="stockSpeaker"></select>
+      <span id="stockSource" class="hint"></span>
+    </div>
+
+    <label id="consentRow" class="consent">
+      <input type="checkbox" id="consent" />
+      I agree that my voice may be recorded and cloned for ReVoice.
+      I can ask for it to be deleted at any time.
+    </label>
+
+    <div>
+      <button id="createUserBtn">Create user</button>
+      <button id="cancelAddBtn">Cancel</button>
+    </div>
+    <p id="addUserStatus" class="hint"></p>
+  </div>
+
   <div class="main-layout">
 
     <!-- LEFT: camera + letter grid -->
@@ -45,8 +87,12 @@
         <option value="urgent">Urgent</option>
         <option value="tender">Tender</option>
       </select>
-      <button id="recordBtn">Record Voice Clip (up to 20s)</button>
-      <span id="recordStatus"></span>
+      <!-- hidden for stock-voice users: they have nothing to record -->
+      <span id="recordControls">
+        <button id="recordBtn">Record Voice Clip (up to 20s)</button>
+        <span id="recordStatus"></span>
+      </span>
+      <p id="stockNote" class="hint" hidden></p>
 
       <h2>4. Speak</h2>
       <label for="engine">Voice engine:</label>
