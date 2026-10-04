@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>ReVoice</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <h1>ReVoice</h1>
+  <p class="subtitle">Head-controlled laser input &rarr; GenAI composition &rarr; cloned voice output</p>
+
+  <div class="main-layout">
+
+    <!-- LEFT: camera + letter grid -->
+    <div class="panel">
+      <h2>1. Point &amp; Select</h2>
+      <div class="camera-wrap">
+        <video id="webcam" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
+      </div>
+      <div class="controls-row">
+        <button id="startCamBtn">Start Camera</button>
+        <label for="trackMode">Tracking:</label>
+        <select id="trackMode">
+          <option value="finger">Finger (index fingertip)</option>
+          <option value="laser">Laser pointer (red dot)</option>
+        </select>
+      </div>
+      <p id="trackStatus" class="hint">Click Start Camera to begin.</p>
+      <p class="hint">Hold the pointer still on a letter until the green ring fills up.</p>
+    </div>
+
+    <!-- RIGHT: composed text + voice controls -->
+    <div class="panel">
+      <h2>2. Composed Text</h2>
+      <div id="composedText" class="composed-box">&nbsp;</div>
+      <button id="clearBtn">Clear</button>
+
+      <h2>3. Voice Bank</h2>
+      <label for="emotion">Emotion tag:</label>
+      <select id="emotion">
+        <option value="neutral">Neutral</option>
+        <option value="happy">Happy</option>
+        <option value="urgent">Urgent</option>
+        <option value="tender">Tender</option>
+      </select>
+      <button id="recordBtn">Record Voice Clip (up to 20s)</button>
+      <span id="recordStatus"></span>
+
+      <h2>4. Speak</h2>
+      <button id="speakBtn">Generate &amp; Speak</button>
+      <audio id="outputAudio" controls></audio>
+      <p id="speakStatus"></p>
+    </div>
+
+  </div>
+
+  <script type="module" src="app.js"></script>
+
+  <!-- Safety check: tells you if app.js failed to load -->
+  <script>
+    (function () {
+      var status = document.getElementById("trackStatus");
+      if (location.protocol === "file:") {
+        status.textContent = "Open this page through the server: run the backend, then go to http://localhost:8000";
+        status.style.color = "#c0392b";
+        return;
+      }
+      setTimeout(function () {
+        if (!window.__revoiceLoaded) {
+          status.textContent = "app.js failed to load. Press F12 → Console to see the error, and make sure you opened http://localhost:8000";
+          status.style.color = "#c0392b";
+        }
+      }, 3000);
+    })();
+  </script>
+</body>
+</html>
