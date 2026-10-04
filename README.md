@@ -9,6 +9,7 @@ GenAI predicts the phrase, and it is spoken in the patient's own cloned voice.
 revoice/
 ├── frontend/       the webpage (webcam, letter grid, predictions, voice recorder)
 ├── backend/        the Python server connecting frontend <-> Colab and Gemini
+│   ├── data/       users and their recordings (created automatically, not in git)
 │   └── tests/      automated tests (Colab and Gemini are faked)
 └── colab/
     ├── revoice_server_v2.ipynb   the voice server (XTTS-v2 + F5-TTS) — the ONLY one to use
@@ -26,7 +27,7 @@ revoice/
 3. Run Step 1 and Step 2 (install). Then **Runtime → Restart session**.
 4. Run Step 2b (version check), Step 3, Step 3b, Step 4.
 5. Paste your ngrok token (https://dashboard.ngrok.com/get-started/your-authtoken) in Step 5.
-6. Run Step 6. The last line must say **ReVoice API v4**.
+6. Run Step 6. The last line must say **ReVoice API v5**.
 
 Our free ngrok domain is static, so the URL stays the same every session:
 `https://handcart-retrieval-mulch.ngrok-free.dev`
@@ -58,18 +59,25 @@ py -3.10 -m pytest
 
 ## How to use it
 
-1. Click **Start Camera** and allow webcam access.
-2. Choose **Finger** or **Laser** tracking. Hold the pointer still on a letter until the
+1. **Pick a user** at the top, or click **+ Add user**:
+   - *Record my voice*: the person's voice is cloned. They must tick the consent box.
+   - *Use a stock voice*: for someone with no healthy voice left to record. Pick one of
+     XTTS's built-in voices (works with XTTS-v2 only).
+   - **Delete user** removes the user and all their recordings from disk, and tells Colab
+     to forget the voice. (Use this after cloning a volunteer's voice in a demo.)
+2. Click **Start Camera** and allow webcam access.
+3. Choose **Finger** or **Laser** tracking. Hold the pointer still on a letter until the
    green ring fills (~1.5 s) to select it. The top row shows 3 AI-predicted phrases —
    dwell on one to use it.
-3. Pick an emotion, click **Record Voice Clip**, and speak naturally in that tone
+4. Pick an emotion, click **Record Voice Clip**, and speak naturally in that tone
    (6–20 s; click again to stop early). 2–3 clips per emotion works best.
-4. Pick a voice engine — **XTTS-v2**, **F5-TTS**, or **Compare both** (generates with
+5. Pick a voice engine — **XTTS-v2**, **F5-TTS**, or **Compare both** (generates with
    each, one after the other, and shows how long each took) — then **Generate & Speak**.
 
 ## Known limitations (honest, worth mentioning in the report)
 
-- **Voice bank resets on backend restart** — stored in memory for now (moving to disk next).
+- **Recordings are stored unencrypted** in `backend/data/` on this computer (never in git).
+  Fine for a prototype; a real product would encrypt them.
 - **Laser detection needs decent lighting and a bright red dot** — red clothing or very
   bright rooms can confuse simple colour thresholding.
 - **Colab free tier disconnects** after inactivity; re-run Steps 3, 3b and 6.

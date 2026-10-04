@@ -39,15 +39,24 @@ frontend/   index.html, style.css
                          ("both" runs sequentially — one shared GPU — and shows timings)
             tracking.js  PURE logic, no DOM (keep it that way so it stays testable):
                          OneEuroFilter, PointerTracker, detectLaserBlob, DwellSelector
-backend/    app.py       FastAPI: POST /upload_voice_clip, GET /voice_bank,
-                         POST /speak (text, emotion, engine -> Colab /synthesize),
-                         POST /predict (Gemini). prepare_text_for_speech() fixes ALL CAPS
-                         and adds emotion punctuation. No-cache middleware for frontend
-                         files. Frontend mounted with StaticFiles LAST.
-                         Voice bank is still IN MEMORY (Phase 1 moves it to disk).
+backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select,
+                         DELETE /profiles/{id} (also calls Colab /forget_voices),
+                         GET /stock_speakers, POST /upload_voice_clip, GET /voice_bank,
+                         POST /speak (text, emotion, engine, profile_id -> Colab /synthesize),
+                         POST /predict (Gemini). Endpoints use the selected profile unless
+                         profile_id is given. prepare_text_for_speech() fixes ALL CAPS and
+                         adds emotion punctuation. No-cache middleware for frontend files
+                         (add new API prefixes to API_PATHS). StaticFiles mounted LAST.
+            profiles.py  ProfileStore: data/profiles/<id>/profile.json + clips/<emotion>/
+                         000001.webm... (newest 3 kept). data/settings.json = selected user.
+                         Ids are validated (SAFE_ID) because they become folder names.
             predictor.py Gemini prompt, reply parsing, offline fallback, is_sensible()
-            tests/       pytest; Colab + Gemini always mocked, real network calls fail
-colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice API v4")
+            tests/       pytest; Colab + Gemini always mocked, real network calls fail;
+                         each test gets a temporary data folder (never touches backend/data)
+            data/        user data (gitignored). Override location with REVOICE_DATA_DIR.
+colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice API v5":
+                                      /synthesize with clips or stock_speaker, /speakers,
+                                      /forget_voices). Only Step 6 holds the API code.
             archive/                  old notebooks — never run them (they broke things)
 ```
 
@@ -67,9 +76,8 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
 
 ## Phases
 - [x] 0 Foundation: git, .env, no-cache, tests, engine selector restored
-- [ ] 1 User profiles + persistent voice bank (backend/data/profiles/<id>/, delete
-      endpoint, profile switcher, Add user panel, stock XTTS speakers, notebook accepts
-      stock speaker)
+- [x] 1 User profiles + persistent voice bank, delete, switcher, Add user panel,
+      stock XTTS speakers (notebook v5)
 - [ ] 2 Guided voice banking (~150 sentences, transcript per clip, LJSpeech zip export)
 - [ ] 3 Fine-tune XTTS (colab/finetune_xtts.ipynb, checkpoints to Drive, engine "xtts_ft")
 - [ ] 4 Safety layer: Emergency Override, False Selection Guard, Ambiguous Phrase Check,
