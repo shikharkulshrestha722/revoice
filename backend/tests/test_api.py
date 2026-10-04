@@ -1,0 +1,209 @@
+# Tests for the web API endpoints. Colab and Gemini are MOCKED (faked),
+# so these run without internet, a GPU, or an API key.
+import base64
+
+import pytest
+import requests
+from fastapi.testclient import TestClient
+
+import app as backend
+
+client = TestClient(backend.app)
+
+
+class FakeResponse:
+    """Pretends to be the reply from requests.post()."""
+    def __init__(self, status_code=200, json_data=None, text=""):
+        self.status_code = status_code
+        self._json = json_data
+        self.text = text
+
+    def json(self):
+        if self._json is None:
+            raise ValueError("not JSON")
+        return self._json
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"status {self.status_code}")
+
+
+@pytest.fixture
+def fake_colab(monkeypatch):
+    """Replaces the real Colab call. Records what was sent; replies with
+    whatever the test puts in fake_colab["reply"]."""
+    record = {"reply": FakeResponse(200, {"audio_base64": "UklGRg=="})}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        record.update(url=url, payload=json, headers=headers)
+        if isinstance(record["reply"], Exception):
+            raise record["reply"]
+        return record["reply"]
+
+    monkeypatch.setattr(backend.requests, "post", fake_post)
+    monkeypatch.setattr(backend, "COLAB_API_URL", "https://colab.test")
+    return record
+
+
+def upload(emotion, data=b"fake-webm-audio"):
+    return client.post(
+        "/upload_voice_clip",
+        data={"emotion": emotion},
+        files={"file": ("clip.webm", data, "audio/webm")},
+    )
+
+
+# ---------- voice bank ----------
+
+def test_upload_and_count_clips():
+    assert upload("happy").json() == {"status": "saved", "emotion": "happy", "clips": 1}
+    upload("happy")
+    upload("urgent")
+    assert client.get("/voice_bank").json() == {"happy": 2, "urgent": 1}
+
+
+def test_only_last_three_clips_are_kept():
+    for i in range(5):
+        upload("neutral", f"clip{i}".encode())
+    clips = backend.voice_bank["neutral"]
+    assert len(clips) == 3
+    assert [base64.b64decode(c) for c in clips] == [b"clip2", b"clip3", b"clip4"]
+
+
+# ---------- /speak ----------
+
+def test_speak_without_clips_is_refused(fake_colab):
+    r = client.post("/speak", data={"text": "HELLO", "emotion": "happy"})
+    assert r.status_code == 400
+    assert "No voice sample" in r.json()["error"]
+    assert "url" not in fake_colab           # Colab was never called
+
+
+def test_speak_unknown_engine_is_refused(fake_colab):
+    upload("neutral")
+    r = client.post("/speak", data={"text": "HELLO", "emotion": "neutral", "engine": "robot"})
+    assert r.status_code == 400
+    assert "Unknown engine" in r.json()["error"]
+
+
+def test_speak_sends_correct_request_to_colab(fake_colab):
+    upload("urgent", b"voice-1")
+    upload("urgent", b"voice-2")
+
+    r = client.post("/speak", data={"text": "I NEED HELP", "emotion": "urgent"})
+
+    assert r.status_code == 200
+    assert r.json() == {"audio_base64": "UklGRg=="}       # passed straight to the browser
+    assert fake_colab["url"] == "https://colab.test/synthesize"
+    assert fake_colab["headers"]["ngrok-skip-browser-warning"] == "true"
+
+    p = fake_colab["payload"]
+    assert p["text"] == "I need help!"                     # cleaned up for speech
+    assert p["emotion"] == "urgent"
+    assert p["engine"] == "xtts"                           # default engine
+    assert p["language"] == "en"
+    assert [base64.b64decode(c) for c in p["speaker_wav_base64_list"]] == [b"voice-1", b"voice-2"]
+    assert p["speaker_wav_base64"] == p["speaker_wav_base64_list"][0]
+
+
+def test_speak_forwards_f5_engine(fake_colab):
+    upload("neutral")
+    client.post("/speak", data={"text": "HELLO", "emotion": "neutral", "engine": "f5"})
+    assert fake_colab["payload"]["engine"] == "f5"
+
+
+def test_speak_handles_trailing_slash_in_colab_url(fake_colab, monkeypatch):
+    monkeypatch.setattr(backend, "COLAB_API_URL", "https://colab.test/")
+    upload("neutral")
+    client.post("/speak", data={"text": "HELLO", "emotion": "neutral"})
+    assert fake_colab["url"] == "https://colab.test/synthesize"
+
+
+def test_speak_reports_colab_error_message(fake_colab):
+    fake_colab["reply"] = FakeResponse(500, {"error": "RuntimeError: ffmpeg failed"})
+    upload("neutral")
+    r = client.post("/speak", data={"text": "HELLO", "emotion": "neutral"})
+    assert r.status_code == 502
+    assert "ffmpeg failed" in r.json()["error"]
+
+
+def test_speak_reports_non_json_colab_error(fake_colab):
+    fake_colab["reply"] = FakeResponse(404, None, text="ERR_NGROK_3200 endpoint offline")
+    upload("neutral")
+    r = client.post("/speak", data={"text": "HELLO", "emotion": "neutral"})
+    assert r.status_code == 502
+    assert "ERR_NGROK_3200" in r.json()["error"]
+
+
+def test_speak_when_colab_is_unreachable(fake_colab):
+    fake_colab["reply"] = requests.exceptions.ConnectionError("connection refused")
+    upload("neutral")
+    r = client.post("/speak", data={"text": "HELLO", "emotion": "neutral"})
+    assert r.status_code == 502
+    assert "Could not reach Colab" in r.json()["error"]
+
+
+# ---------- /predict ----------
+
+def test_predict_uses_gemini_when_key_is_set(monkeypatch):
+    prompts = []
+    monkeypatch.setattr(backend, "GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(backend, "call_gemini",
+                        lambda p: prompts.append(p) or '["I need water", "I need help", "I need rest"]')
+
+    r = client.post("/predict", data={"text": "I NEED "})
+
+    assert r.json() == {"suggestions": ["I need water", "I need help", "I need rest"], "source": "gemini"}
+    assert '"I NEED"' in prompts[0]
+
+
+@pytest.mark.parametrize("key", ["", "PASTE_YOUR_GEMINI_KEY_HERE"])
+def test_predict_without_key_is_offline_and_never_calls_gemini(monkeypatch, key):
+    def must_not_be_called(prompt):
+        raise AssertionError("Gemini was called without a key")
+    monkeypatch.setattr(backend, "GEMINI_API_KEY", key)
+    monkeypatch.setattr(backend, "call_gemini", must_not_be_called)
+
+    r = client.post("/predict", data={"text": ""})
+    assert r.json()["source"] == "offline"
+    assert len(r.json()["suggestions"]) == 3
+
+
+def test_predict_falls_back_when_gemini_fails(monkeypatch):
+    def broken(prompt):
+        raise requests.exceptions.Timeout("too slow")
+    monkeypatch.setattr(backend, "GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(backend, "call_gemini", broken)
+
+    r = client.post("/predict", data={"text": "I "})
+    assert r.json() == {"suggestions": ["I need", "I am", "I want"], "source": "offline"}
+
+
+def test_call_gemini_sends_key_in_header_and_reads_reply(monkeypatch):
+    sent = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        sent.update(url=url, headers=headers, body=json)
+        return FakeResponse(200, {"candidates": [{"content": {"parts": [{"text": '["Yes"]'}]}}]})
+
+    monkeypatch.setattr(backend, "GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(backend.requests, "post", fake_post)
+
+    assert backend.call_gemini("hello") == '["Yes"]'
+    assert sent["headers"]["x-goog-api-key"] == "test-key"
+    assert "test-key" not in sent["url"]                  # key never goes in the URL
+    assert sent["body"]["contents"][0]["parts"][0]["text"] == "hello"
+
+
+# ---------- no-cache middleware ----------
+
+@pytest.mark.parametrize("path", ["/", "/app.js", "/tracking.js", "/style.css"])
+def test_frontend_files_are_not_cached(path):
+    r = client.get(path)
+    assert r.status_code == 200
+    assert "no-store" in r.headers["cache-control"]
+
+
+def test_api_replies_are_not_given_the_no_cache_header():
+    r = client.get("/voice_bank")
+    assert "cache-control" not in r.headers
