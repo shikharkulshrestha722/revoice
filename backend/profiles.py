@@ -6,6 +6,8 @@
 #   data/profiles/<profile_id>/
 #       profile.json          name, voice type, consent, date created
 #       clips/<emotion>/      their recorded voice clips (newest 3 kept)
+#       guided/               guided voice banking: one clip per sentence +
+#                             manifest.json with the exact words of each
 #
 # The currently selected user is remembered in data/settings.json,
 # so everything survives a backend restart.
@@ -19,6 +21,8 @@ import secrets
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+
+from guided_sentences import GUIDED_SENTENCES, SENTENCE_BY_ID
 
 EMOTIONS = ("neutral", "happy", "urgent", "tender")
 VOICE_TYPES = ("cloned", "stock")
@@ -183,3 +187,148 @@ class ProfileStore:
         clips_root = self._folder(profile_id) / "clips"
         return {e: len(self._clip_files(clips_root / e))
                 for e in EMOTIONS if self._clip_files(clips_root / e)}
+
+    # ---------- guided voice banking ----------
+    # data/profiles/<id>/guided/
+    #     g001.webm, g002.webm ...   one recording per sentence
+    #     manifest.json              for each recording: the EXACT sentence read,
+    #                                its length, when it was made; plus which
+    #                                sentences were skipped and which recordings
+    #                                are used as voice references
+    def _guided_dir(self, profile_id: str) -> Path:
+        return self._folder(profile_id) / "guided"
+
+    def _read_manifest(self, profile_id: str) -> dict:
+        try:
+            m = json.loads((self._guided_dir(profile_id) / "manifest.json").read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            m = {}
+        m.setdefault("recordings", {})
+        m.setdefault("skipped", [])
+        m.setdefault("references", [])
+        return m
+
+    def _write_manifest(self, profile_id: str, manifest: dict):
+        folder = self._guided_dir(profile_id)
+        folder.mkdir(exist_ok=True)
+        (folder / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    def _check_sentence(self, sentence_id: str) -> str:
+        if sentence_id not in SENTENCE_BY_ID:
+            raise ProfileError(f"Unknown sentence '{sentence_id}'.")
+        return SENTENCE_BY_ID[sentence_id]
+
+    def save_guided(self, profile_id: str, sentence_id: str, audio: bytes,
+                    extension: str = ".webm", duration_s: float = 0.0) -> dict:
+        """Saves (or replaces, for Redo) the recording of one sentence."""
+        if self.get(profile_id)["voice_type"] != "cloned":
+            raise ProfileError("This user has a stock voice, so recordings aren't used.")
+        text = self._check_sentence(sentence_id)
+        if not audio:
+            raise ProfileError("The recording was empty.")
+        if not (0.5 <= duration_s <= 60):
+            raise ProfileError("Recording length must be between half a second and a minute.")
+        extension = extension.lower() if extension.lower() in AUDIO_EXTENSIONS else ".webm"
+
+        folder = self._guided_dir(profile_id)
+        folder.mkdir(exist_ok=True)
+        for old in folder.glob(f"{sentence_id}.*"):      # Redo: remove the previous take
+            if old.suffix.lower() in AUDIO_EXTENSIONS:
+                old.unlink()
+        (folder / f"{sentence_id}{extension}").write_bytes(audio)
+
+        manifest = self._read_manifest(profile_id)
+        manifest["recordings"][sentence_id] = {
+            "file": f"{sentence_id}{extension}",
+            "text": text,                      # the exact words, kept with the clip
+            "duration_s": round(float(duration_s), 2),
+            "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        if sentence_id in manifest["skipped"]:
+            manifest["skipped"].remove(sentence_id)
+        self._write_manifest(profile_id, manifest)
+        return self.guided_status(profile_id)
+
+    def skip_guided(self, profile_id: str, sentence_id: str) -> dict:
+        """Marks a sentence as skipped. It's offered again once the rest are done."""
+        self._check_sentence(sentence_id)
+        manifest = self._read_manifest(profile_id)
+        if sentence_id not in manifest["recordings"] and sentence_id not in manifest["skipped"]:
+            manifest["skipped"].append(sentence_id)
+            self._write_manifest(profile_id, manifest)
+        return self.guided_status(profile_id)
+
+    def guided_status(self, profile_id: str) -> dict:
+        """Progress so far, and which sentence to show next (so you can resume later)."""
+        manifest = self._read_manifest(profile_id)
+        recorded = manifest["recordings"]
+        not_recorded = [sid for sid, _ in GUIDED_SENTENCES if sid not in recorded]
+        fresh = [sid for sid in not_recorded if sid not in manifest["skipped"]]
+        # next = first sentence never seen; once those run out, go back to the skipped ones
+        next_id = (fresh or not_recorded or [None])[0]
+        return {
+            "recorded": {sid: {"duration_s": r["duration_s"], "recorded_at": r["recorded_at"]}
+                         for sid, r in recorded.items()},
+            "skipped": list(manifest["skipped"]),
+            "references": list(manifest["references"]),
+            "count": len(recorded),
+            "total_sentences": len(GUIDED_SENTENCES),
+            "total_seconds": round(sum(r["duration_s"] for r in recorded.values()), 1),
+            "next_id": next_id,
+        }
+
+    def guided_audio_path(self, profile_id: str, sentence_id: str) -> Path:
+        self._check_sentence(sentence_id)
+        rec = self._read_manifest(profile_id)["recordings"].get(sentence_id)
+        path = self._guided_dir(profile_id) / rec["file"] if rec else None
+        if not path or not path.is_file():
+            raise ProfileNotFound(f"No recording for sentence '{sentence_id}'.")
+        return path
+
+    def guided_items(self, profile_id: str) -> list:
+        """(sentence_id, exact text, audio file) for every recording, in sentence order."""
+        recorded = self._read_manifest(profile_id)["recordings"]
+        items = []
+        for sid, _ in GUIDED_SENTENCES:
+            rec = recorded.get(sid)
+            if rec and (self._guided_dir(profile_id) / rec["file"]).is_file():
+                items.append((sid, rec["text"], self._guided_dir(profile_id) / rec["file"]))
+        return items
+
+    # ---------- guided recordings as cloning references ----------
+    def pick_references(self, profile_id: str, target_seconds: float = 30.0, max_clips: int = 10) -> list:
+        """
+        Chooses guided recordings to use as voice references for zero-shot cloning.
+        XTTS joins all reference clips together and listens to the first 30 seconds
+        (gpt_cond_len=30 in the Colab notebook), so we take the LONGEST recordings
+        (more speech, less silence) until they add up to about 30 seconds.
+        """
+        recorded = self._read_manifest(profile_id)["recordings"]
+        if not recorded:
+            raise ProfileError("Record some guided sentences first.")
+        longest_first = sorted(recorded.items(), key=lambda kv: kv[1]["duration_s"], reverse=True)
+        chosen, total = [], 0.0
+        for sid, rec in longest_first[:max_clips]:
+            chosen.append(sid)
+            total += rec["duration_s"]
+            if total >= target_seconds:
+                break
+        manifest = self._read_manifest(profile_id)
+        manifest["references"] = chosen
+        self._write_manifest(profile_id, manifest)
+        return chosen
+
+    def clear_references(self, profile_id: str):
+        manifest = self._read_manifest(profile_id)
+        manifest["references"] = []
+        self._write_manifest(profile_id, manifest)
+
+    def get_reference_clips(self, profile_id: str) -> list:
+        """The chosen guided recordings as raw bytes (skips any that were deleted)."""
+        out = []
+        for sid in self._read_manifest(profile_id)["references"]:
+            try:
+                out.append(self.guided_audio_path(profile_id, sid).read_bytes())
+            except ProfileNotFound:
+                continue
+        return out

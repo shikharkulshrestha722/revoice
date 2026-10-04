@@ -11,7 +11,7 @@
 # ============================================================
 
 from fastapi import FastAPI, UploadFile, Form, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 import requests
@@ -21,6 +21,8 @@ import re
 
 from predictor import get_suggestions
 from profiles import ProfileStore, ProfileError, ProfileNotFound
+from guided_sentences import GUIDED_SENTENCES
+from dataset_export import build_dataset_zip
 
 # ------------------------------------------------------------
 # SETTINGS come from backend/.env (copy .env.example to .env).
@@ -47,7 +49,7 @@ app = FastAPI()
 # after we edit it. API replies are left alone.
 # ------------------------------------------------------------
 API_PATHS = ("/predict", "/speak", "/upload_voice_clip", "/voice_bank",
-             "/profiles", "/stock_speakers")
+             "/profiles", "/stock_speakers", "/guided")
 
 
 @app.middleware("http")
@@ -229,6 +231,73 @@ async def voice_bank_status(profile_id: str = ""):
     return resolve_profile(profile_id)["clip_counts"]
 
 
+# ------------------------------------------------------------
+# GUIDED VOICE BANKING
+# The person reads sentences one by one; each clip is saved with
+# its exact words (training data for fine-tuning, see Phase 3).
+# ------------------------------------------------------------
+@app.get("/guided/sentences")
+async def guided_sentences():
+    return {"sentences": [{"id": sid, "text": text} for sid, text in GUIDED_SENTENCES]}
+
+
+@app.get("/guided/status")
+async def guided_status(profile_id: str = ""):
+    """Progress, total minutes, and which sentence to show next (resume later)."""
+    return store.guided_status(resolve_profile(profile_id)["id"])
+
+
+@app.post("/guided/record")
+async def guided_record(sentence_id: str = Form(...), duration_s: float = Form(...),
+                        file: UploadFile = None, profile_id: str = Form("")):
+    """Saves one guided recording. Recording the same sentence again = Redo."""
+    if file is None:
+        raise ProfileError("No audio file was sent.")
+    profile = resolve_profile(profile_id)
+    extension = os.path.splitext(file.filename or "")[1] or ".webm"
+    return store.save_guided(profile["id"], sentence_id, await file.read(), extension, duration_s)
+
+
+@app.post("/guided/skip")
+async def guided_skip(sentence_id: str = Form(...), profile_id: str = Form("")):
+    return store.skip_guided(resolve_profile(profile_id)["id"], sentence_id)
+
+
+@app.get("/guided/audio/{sentence_id}")
+async def guided_audio(sentence_id: str, profile_id: str = ""):
+    """Plays back a saved guided recording."""
+    path = store.guided_audio_path(resolve_profile(profile_id)["id"], sentence_id)
+    media = {".webm": "audio/webm", ".wav": "audio/wav", ".ogg": "audio/ogg",
+             ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/guided/references")
+async def guided_use_as_references(profile_id: str = Form("")):
+    """Use the best guided recordings as voice references for cloning."""
+    pid = resolve_profile(profile_id)["id"]
+    store.pick_references(pid)
+    return store.guided_status(pid)
+
+
+@app.delete("/guided/references")
+async def guided_clear_references(profile_id: str = ""):
+    pid = resolve_profile(profile_id)["id"]
+    store.clear_references(pid)
+    return store.guided_status(pid)
+
+
+@app.get("/profiles/{profile_id}/export")
+async def export_dataset(profile_id: str):
+    """Downloads the user's guided recordings as an LJSpeech-style zip."""
+    data = build_dataset_zip(store, profile_id)
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="revoice_dataset_{profile_id}.zip"'},
+    )
+
+
 # Voice engines the Colab notebook understands:
 #   "xtts" = XTTS-v2 (default), "f5" = F5-TTS
 SUPPORTED_ENGINES = ("xtts", "f5")
@@ -267,12 +336,18 @@ async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = F
         payload["stock_speaker"] = profile["stock_speaker"]
         print(f"[speak:{engine}] {text!r} -> {spoken_text!r} with stock voice {profile['stock_speaker']!r}")
     else:
-        clips = [base64.b64encode(c).decode("utf-8") for c in store.get_clips(profile["id"], emotion)]
-        if not clips:
+        raw_clips = store.get_clips(profile["id"], emotion)
+        if not raw_clips:
+            # no clip for this emotion: fall back to the guided recordings chosen as
+            # references (the emotion still changes speed/expressiveness on Colab)
+            raw_clips = store.get_reference_clips(profile["id"])
+        if not raw_clips:
             return JSONResponse(
-                {"error": f"No voice sample recorded yet for emotion '{emotion}'."},
+                {"error": f"No voice sample recorded yet for emotion '{emotion}'. "
+                          "Record one, or use guided recordings as voice references."},
                 status_code=400,
             )
+        clips = [base64.b64encode(c).decode("utf-8") for c in raw_clips]
         payload["speaker_wav_base64"] = clips[0]          # kept for older Colab notebooks
         payload["speaker_wav_base64_list"] = clips        # all clips = better cloning
         print(f"[speak:{engine}] {text!r} -> {spoken_text!r} using {len(clips)} clip(s) of {profile['id']}")
