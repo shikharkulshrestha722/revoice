@@ -2,11 +2,12 @@
 # ReVoice — Backend
 # ============================================================
 # This is the "messenger" between the webpage and Colab.
-# It does 3 jobs:
+# Its jobs:
 #   1. Serve the frontend webpage
-#   2. Save voice bank recordings the patient records
-#   3. Forward text + a voice reference to the Colab API, and
+#   2. Manage user profiles and save their voice recordings on disk
+#   3. Forward text + the user's voice to the Colab API, and
 #      pass the generated audio back to the webpage
+#   4. Ask Gemini for phrase predictions
 # ============================================================
 
 from fastapi import FastAPI, UploadFile, Form, Request
@@ -19,6 +20,7 @@ import os
 import re
 
 from predictor import get_suggestions
+from profiles import ProfileStore, ProfileError, ProfileNotFound
 
 # ------------------------------------------------------------
 # SETTINGS come from backend/.env (copy .env.example to .env).
@@ -44,7 +46,8 @@ app = FastAPI()
 # Without this the browser sometimes keeps running an OLD app.js
 # after we edit it. API replies are left alone.
 # ------------------------------------------------------------
-API_PATHS = ("/predict", "/speak", "/upload_voice_clip", "/voice_bank")
+API_PATHS = ("/predict", "/speak", "/upload_voice_clip", "/voice_bank",
+             "/profiles", "/stock_speakers")
 
 
 @app.middleware("http")
@@ -108,27 +111,122 @@ async def predict(text: str = Form("")):
     return result
 
 
-# In-memory voice bank: { "happy": ["<base64 audio>", ...], ... }
-# More clips per emotion = better cloning. We keep the most recent MAX_CLIPS.
-# NOTE: this resets when the server restarts; a real deployment would save to disk.
-voice_bank = {}
-MAX_CLIPS_PER_EMOTION = 3
+# ------------------------------------------------------------
+# USER PROFILES + VOICE BANK (saved on disk, see profiles.py)
+# ------------------------------------------------------------
+# Data folder can be moved with REVOICE_DATA_DIR in .env; default is backend/data
+DATA_DIR = os.environ.get("REVOICE_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+store = ProfileStore(DATA_DIR)
+
+# Used only if Colab is offline when the "Add user" panel asks for the list.
+# The live list comes from the Colab notebook (GET /speakers).
+FALLBACK_STOCK_SPEAKERS = [
+    "Ana Florence", "Claribel Dervla", "Daisy Studious", "Gracie Wise",
+    "Andrew Chipper", "Craig Gutsy", "Damien Black", "Viktor Eka",
+]
+
+
+# Turn our own errors into clear messages for the web page
+@app.exception_handler(ProfileError)
+async def profile_error(request: Request, exc: ProfileError):
+    return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.exception_handler(ProfileNotFound)
+async def profile_not_found(request: Request, exc: ProfileNotFound):
+    return JSONResponse({"error": str(exc)}, status_code=404)
+
+
+def resolve_profile(profile_id: str = "") -> dict:
+    """The profile a request is about: the one named, or else the selected one."""
+    profile_id = profile_id or store.active_id()
+    if not profile_id:
+        raise ProfileError("No user selected. Click '+ Add user' first.")
+    return store.get(profile_id)
+
+
+@app.get("/profiles")
+async def list_profiles():
+    """All users, plus which one is selected."""
+    return {"profiles": store.list(), "active": store.active_id()}
+
+
+@app.post("/profiles")
+async def create_profile(
+    name: str = Form(...),
+    voice_type: str = Form("cloned"),
+    stock_speaker: str = Form(""),
+    consent_given: bool = Form(False),
+):
+    """Adds a user and selects them straight away."""
+    profile = store.create(name, voice_type, stock_speaker, consent_given)
+    store.select(profile["id"])
+    print(f"[profiles] created {profile['id']} ({voice_type})")
+    return store.get(profile["id"])
+
+
+@app.post("/profiles/{profile_id}/select")
+async def select_profile(profile_id: str):
+    return store.select(profile_id)
+
+
+@app.delete("/profiles/{profile_id}")
+async def delete_profile(profile_id: str):
+    """
+    Deletes a user and ALL their recordings from disk.
+    Also asks Colab to forget any voice it built from their clips
+    (best effort: if Colab is offline, its memory is wiped on restart anyway).
+    """
+    store.delete(profile_id)
+    print(f"[profiles] deleted {profile_id}")
+    try:
+        r = requests.post(
+            f"{COLAB_API_URL.rstrip('/')}/forget_voices",
+            headers={"ngrok-skip-browser-warning": "true"},
+            timeout=10,
+        )
+        colab_cleared = r.status_code == 200
+    except requests.exceptions.RequestException:
+        colab_cleared = False
+    return {"deleted": profile_id, "active": store.active_id(), "colab_cache_cleared": colab_cleared}
+
+
+@app.get("/stock_speakers")
+async def stock_speakers():
+    """Built-in XTTS voices, for patients who have no healthy voice left to bank."""
+    try:
+        r = requests.get(
+            f"{COLAB_API_URL.rstrip('/')}/speakers",
+            headers={"ngrok-skip-browser-warning": "true"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        speakers = r.json().get("speakers") or []
+        if speakers:
+            return {"speakers": speakers, "source": "colab"}
+    except (requests.exceptions.RequestException, ValueError):
+        pass
+    return {"speakers": FALLBACK_STOCK_SPEAKERS, "source": "fallback"}
 
 
 @app.post("/upload_voice_clip")
-async def upload_voice_clip(emotion: str = Form(...), file: UploadFile = None):
-    """Receives a recorded voice sample from the browser and adds it to the voice bank."""
-    audio_bytes = await file.read()
-    clips = voice_bank.setdefault(emotion, [])
-    clips.append(base64.b64encode(audio_bytes).decode("utf-8"))
-    del clips[:-MAX_CLIPS_PER_EMOTION]     # keep only the most recent few
-    return {"status": "saved", "emotion": emotion, "clips": len(clips)}
+async def upload_voice_clip(emotion: str = Form(...), file: UploadFile = None,
+                            profile_id: str = Form("")):
+    """Receives a recorded voice sample and saves it in the user's voice bank on disk."""
+    if file is None:
+        raise ProfileError("No audio file was sent.")
+    profile = resolve_profile(profile_id)
+    extension = os.path.splitext(file.filename or "")[1] or ".webm"
+    count = store.add_clip(profile["id"], emotion, await file.read(), extension)
+    return {"status": "saved", "profile": profile["id"], "emotion": emotion, "clips": count}
 
 
 @app.get("/voice_bank")
-async def voice_bank_status():
-    """How many clips are stored for each emotion (used by the web page)."""
-    return {e: len(c) for e, c in voice_bank.items()}
+async def voice_bank_status(profile_id: str = ""):
+    """How many clips the user has for each emotion (used by the web page)."""
+    if not (profile_id or store.active_id()):
+        return {}
+    return resolve_profile(profile_id)["clip_counts"]
 
 
 # Voice engines the Colab notebook understands:
@@ -137,11 +235,12 @@ SUPPORTED_ENGINES = ("xtts", "f5")
 
 
 @app.post("/speak")
-async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("xtts")):
+async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("xtts"),
+                profile_id: str = Form("")):
     """
-    Takes the composed sentence + chosen emotion, finds the matching
-    reference voice clip, and asks the Colab API to generate speech
-    with the chosen engine.
+    Takes the composed sentence + chosen emotion, finds the user's
+    voice (their recordings, or a stock voice), and asks the Colab API
+    to generate speech with the chosen engine.
     """
     if engine not in SUPPORTED_ENGINES:
         return JSONResponse(
@@ -149,24 +248,34 @@ async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = F
             status_code=400,
         )
 
-    clips = voice_bank.get(emotion) or []
-    if not clips:
-        return JSONResponse(
-            {"error": f"No voice sample recorded yet for emotion '{emotion}'."},
-            status_code=400,
-        )
-
+    profile = resolve_profile(profile_id)
     spoken_text = prepare_text_for_speech(text, emotion)
-    print(f"[speak:{engine}] {text!r} -> {spoken_text!r} using {len(clips)} reference clip(s)")
-
     payload = {
         "text": spoken_text,
-        "speaker_wav_base64": clips[0],          # kept for older Colab notebooks
-        "speaker_wav_base64_list": clips,        # all clips = better cloning
         "language": "en",
         "emotion": emotion,                      # lets Colab adjust speed/expressiveness
         "engine": engine,                        # which voice model Colab should use
     }
+
+    if profile["voice_type"] == "stock":
+        # stock voice: no recordings, Colab uses one of XTTS's built-in speakers
+        if engine != "xtts":
+            return JSONResponse(
+                {"error": "Stock voices only work with XTTS-v2 (F5-TTS needs a recorded voice)."},
+                status_code=400,
+            )
+        payload["stock_speaker"] = profile["stock_speaker"]
+        print(f"[speak:{engine}] {text!r} -> {spoken_text!r} with stock voice {profile['stock_speaker']!r}")
+    else:
+        clips = [base64.b64encode(c).decode("utf-8") for c in store.get_clips(profile["id"], emotion)]
+        if not clips:
+            return JSONResponse(
+                {"error": f"No voice sample recorded yet for emotion '{emotion}'."},
+                status_code=400,
+            )
+        payload["speaker_wav_base64"] = clips[0]          # kept for older Colab notebooks
+        payload["speaker_wav_base64_list"] = clips        # all clips = better cloning
+        print(f"[speak:{engine}] {text!r} -> {spoken_text!r} using {len(clips)} clip(s) of {profile['id']}")
 
     try:
         response = requests.post(

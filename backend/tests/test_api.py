@@ -45,6 +45,14 @@ def fake_colab(monkeypatch):
     return record
 
 
+@pytest.fixture(autouse=True)
+def tester(store):
+    """Most tests need a selected user with a cloned voice."""
+    profile = store.create("Tester", "cloned", consent_given=True)
+    store.select(profile["id"])
+    return profile
+
+
 def upload(emotion, data=b"fake-webm-audio"):
     return client.post(
         "/upload_voice_clip",
@@ -55,19 +63,24 @@ def upload(emotion, data=b"fake-webm-audio"):
 
 # ---------- voice bank ----------
 
-def test_upload_and_count_clips():
-    assert upload("happy").json() == {"status": "saved", "emotion": "happy", "clips": 1}
+def test_upload_and_count_clips(tester):
+    assert upload("happy").json() == {
+        "status": "saved", "profile": tester["id"], "emotion": "happy", "clips": 1}
     upload("happy")
     upload("urgent")
     assert client.get("/voice_bank").json() == {"happy": 2, "urgent": 1}
 
 
-def test_only_last_three_clips_are_kept():
+def test_only_last_three_clips_are_kept(store, tester):
     for i in range(5):
         upload("neutral", f"clip{i}".encode())
-    clips = backend.voice_bank["neutral"]
-    assert len(clips) == 3
-    assert [base64.b64decode(c) for c in clips] == [b"clip2", b"clip3", b"clip4"]
+    assert store.get_clips(tester["id"], "neutral") == [b"clip2", b"clip3", b"clip4"]
+
+
+def test_upload_unknown_emotion_is_refused():
+    r = upload("../../evil")
+    assert r.status_code == 400
+    assert "Unknown emotion" in r.json()["error"]
 
 
 # ---------- /speak ----------
