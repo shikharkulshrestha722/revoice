@@ -147,13 +147,27 @@ def fallback_suggestions(text: str, limit: int = 3) -> list:
     return out[:limit]
 
 
+# How AI refusals / chatty replies start. These must be SPECIFIC:
+# a plain "i can't" or "i'm sorry" would also block real patient
+# phrases like "I can't breathe" or "I'm sorry".
+REFUSAL_PATTERNS = [
+    r"^(i'm|i am) sorry,? but\b",
+    r"^i (cannot|can't|can not) (help|assist|provide|fulfil|fulfill|comply|do that)\b",
+    r"^as an ai\b",
+    r"^sure,",
+    r"^here (are|is)\b",
+    r"^here's\b",
+    r"^okay,",
+    r"^note:",
+]
+
+
 def is_sensible(s: str) -> bool:
     """Rejects refusals, explanations, and anything too long to be a spoken phrase."""
     if not s or len(s) > 60 or len(s.split()) > 10:
         return False
-    bad_starts = ("i'm sorry", "i am sorry", "i cannot", "i can't", "as an ai",
-                  "sure,", "here are", "here's", "okay,", "note:")
-    return not s.lower().startswith(bad_starts)
+    lowered = s.lower().strip()
+    return not any(re.search(p, lowered) for p in REFUSAL_PATTERNS)
 
 
 def get_suggestions(text: str, call_gemini=None, limit: int = 3) -> dict:
