@@ -1,57 +1,80 @@
 # ReVoice — Setup Guide
 
+Assistive communication for people with paralysis/ALS: select letters by pointing,
+GenAI predicts the phrase, and it is spoken in the patient's own cloned voice.
+
 ## What's in this folder
 
 ```
 revoice/
-├── frontend/       the webpage (webcam, letter grid, voice recorder)
-├── backend/        the Python server connecting frontend <-> Colab
-└── colab/          the notebook that runs voice cloning on Google Colab
+├── frontend/       the webpage (webcam, letter grid, predictions, voice recorder)
+├── backend/        the Python server connecting frontend <-> Colab and Gemini
+│   └── tests/      automated tests (Colab and Gemini are faked)
+└── colab/
+    ├── revoice_server_v2.ipynb   the voice server (XTTS-v2 + F5-TTS) — the ONLY one to use
+    └── archive/                  old notebooks — do NOT run these
 ```
+
+> **Only `colab/revoice_server_v2.ipynb` is valid.** Running cells from older notebooks
+> in the same Colab session breaks the installed packages and steals the ngrok URL.
 
 ## How to run it (in order)
 
-### 1. Start the Colab notebook first
-1. Upload `colab/xtts_server.ipynb` to https://colab.research.google.com
-2. Go to **Runtime → Change runtime type → GPU**
-3. Get a free ngrok token: https://dashboard.ngrok.com/get-started/your-authtoken
-4. Paste it into the cell that says `NGROK_AUTH_TOKEN = "..."`
-5. Run every cell top to bottom
-6. The last cell will print a URL like `https://xxxx.ngrok-free.app` — **copy it**
+### 1. Start the Colab notebook
+1. Upload `colab/revoice_server_v2.ipynb` to https://colab.research.google.com
+2. **Runtime → Change runtime type → T4 GPU**
+3. Run Step 1 and Step 2 (install). Then **Runtime → Restart session**.
+4. Run Step 2b (version check), Step 3, Step 3b, Step 4.
+5. Paste your ngrok token (https://dashboard.ngrok.com/get-started/your-authtoken) in Step 5.
+6. Run Step 6. The last line must say **ReVoice API v4**.
 
-### 2. Update the backend with that URL
-Open `backend/app.py` and replace this line with your copied URL:
-```python
-COLAB_API_URL = "https://REPLACE-WITH-YOUR-NGROK-URL.ngrok-free.app"
+Our free ngrok domain is static, so the URL stays the same every session:
+`https://handcart-retrieval-mulch.ngrok-free.dev`
+
+### 2. Configure the backend (first time only)
+Copy `backend/.env.example` to `backend/.env` and fill in:
 ```
+COLAB_API_URL=https://handcart-retrieval-mulch.ngrok-free.dev
+GEMINI_API_KEY=your-key-from-aistudio.google.com
+```
+`.env` is ignored by git, so keys never get committed. Without a Gemini key, predictions
+still work from an offline word list.
 
-### 3. Install and run the backend
-```bash
+### 3. Install and run the backend (always Python 3.10)
+```powershell
 cd backend
-pip install -r requirements.txt
-uvicorn app:app --reload
+py -3.10 -m pip install -r requirements.txt
+py -3.10 -m uvicorn app:app --reload
 ```
 
 ### 4. Open the app
-Go to **http://localhost:8000** in your browser.
+Go to **http://localhost:8000** in Chrome.
 
-## How to actually use it
+### Running the tests
+```powershell
+cd backend
+py -3.10 -m pytest
+```
 
-1. Click **Start Camera** — allow webcam access
-2. Point a laser pointer (or your finger, for testing) at the grid — hold still on a letter for ~1.5 seconds to select it
-3. Pick an emotion from the dropdown, click **Record 5s Reference Clip**, and speak a sentence in that tone
-4. Once you've composed a sentence and recorded at least one voice clip, click **Generate & Speak**
+## How to use it
 
-## Known limitations (mention these in your report — they're honest, not flaws to hide)
+1. Click **Start Camera** and allow webcam access.
+2. Choose **Finger** or **Laser** tracking. Hold the pointer still on a letter until the
+   green ring fills (~1.5 s) to select it. The top row shows 3 AI-predicted phrases —
+   dwell on one to use it.
+3. Pick an emotion, click **Record Voice Clip**, and speak naturally in that tone
+   (6–20 s; click again to stop early). 2–3 clips per emotion works best.
+4. Pick a voice engine — **XTTS-v2**, **F5-TTS**, or **Compare both** (generates with
+   each, one after the other, and shows how long each took) — then **Generate & Speak**.
 
-- **Colab's URL changes every session** (free ngrok tier) — you'll re-copy it each time you restart the notebook
-- **Voice bank resets on backend restart** — it's stored in memory for this prototype; a real version would save to disk/database
-- **Laser detection needs decent lighting and a genuinely bright red dot** — very bright rooms or red clothing in frame can cause false detections; this is a known limitation of simple color-thresholding and worth mentioning as future work (e.g., using a specific wavelength filter)
-- **GenAI predictive composition (Gemini) isn't wired in yet** — this version composes letter-by-letter; that's the next piece to add
+## Known limitations (honest, worth mentioning in the report)
 
-## What to build next
+- **Voice bank resets on backend restart** — stored in memory for now (moving to disk next).
+- **Laser detection needs decent lighting and a bright red dot** — red clothing or very
+  bright rooms can confuse simple colour thresholding.
+- **Colab free tier disconnects** after inactivity; re-run Steps 3, 3b and 6.
 
-1. Add GenAI phrase prediction between the grid and the composed text box
-2. Add the rule-based safety checks (e.g., flag emergency keywords)
-3. Add a simple caregiver "Confirm / Override" step before speaking
-4. Save the voice bank to disk instead of memory
+## Licences
+- **F5-TTS model weights are released for non-commercial use only** (fine for a college
+  project, not for a product).
+- XTTS-v2 is under the Coqui Public Model License (also non-commercial).
