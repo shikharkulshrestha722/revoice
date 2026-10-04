@@ -49,8 +49,28 @@
       <span id="recordStatus"></span>
 
       <h2>4. Speak</h2>
+      <label for="engine">Voice engine:</label>
+      <select id="engine">
+        <option value="xtts">XTTS-v2</option>
+        <option value="f5">F5-TTS</option>
+        <option value="both">Compare both</option>
+      </select>
       <button id="speakBtn">Generate &amp; Speak</button>
+
+      <!-- single engine: one player -->
       <audio id="outputAudio" controls></audio>
+
+      <!-- "Compare both": one labelled player per engine -->
+      <div id="compareBox" class="compare-box" hidden>
+        <div class="compare-item">
+          <strong>XTTS-v2</strong> <span id="timeXtts" class="compare-time"></span>
+          <audio id="audioXtts" controls></audio>
+        </div>
+        <div class="compare-item">
+          <strong>F5-TTS</strong> <span id="timeF5" class="compare-time"></span>
+          <audio id="audioF5" controls></audio>
+        </div>
+      </div>
       <p id="speakStatus"></p>
     </div>
 

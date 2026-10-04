@@ -487,31 +487,92 @@ document.getElementById("recordBtn").onclick = async () => {
 };
 
 // ---------- SPEAK ----------
+const ENGINE_NAMES = { xtts: "XTTS-v2", f5: "F5-TTS" };
+let speaking = false;   // stops a second click starting another generation
+
+// Asks the backend for speech from ONE engine.
+// Returns { audioSrc, seconds } or throws an Error with a readable message.
+async function requestSpeech(engine, text, emotion) {
+  const formData = new FormData();
+  formData.append("text", text);
+  formData.append("emotion", emotion);
+  formData.append("engine", engine);
+
+  const start = performance.now();
+  const res = await fetch("/speak", { method: "POST", body: formData });
+  const seconds = (performance.now() - start) / 1000;
+
+  let data;
+  try { data = await res.json(); } catch { data = {}; }
+  if (!res.ok) throw new Error(data.error || `server returned ${res.status}`);
+
+  return { audioSrc: "data:audio/wav;base64," + data.audio_base64, seconds };
+}
+
 document.getElementById("speakBtn").onclick = async () => {
   const statusEl = document.getElementById("speakStatus");
   const emotion = document.getElementById("emotion").value;
+  const engine = document.getElementById("engine").value;
+  const singleAudio = document.getElementById("outputAudio");
+  const compareBox = document.getElementById("compareBox");
 
+  if (speaking) return;
   if (!composedText.trim()) {
     statusEl.textContent = "Compose a sentence first.";
     return;
   }
 
-  statusEl.textContent = "Generating speech...";
-  const formData = new FormData();
-  formData.append("text", composedText);
-  formData.append("emotion", emotion);
+  speaking = true;
+  const text = composedText;   // remember the text now, in case it changes while we wait
+  try {
+    if (engine !== "both") {
+      // --- one engine, one player ---
+      compareBox.hidden = true;
+      singleAudio.hidden = false;
+      statusEl.textContent = `Generating speech with ${ENGINE_NAMES[engine]}...`;
+      try {
+        const { audioSrc, seconds } = await requestSpeech(engine, text, emotion);
+        singleAudio.src = audioSrc;
+        singleAudio.play();
+        statusEl.textContent = `Done in ${seconds.toFixed(1)}s (${ENGINE_NAMES[engine]}).`;
+      } catch (err) {
+        statusEl.textContent = "Error: " + err.message;
+      }
+      return;
+    }
 
-  const res = await fetch("/speak", { method: "POST", body: formData });
-  if (!res.ok) {
-    const err = await res.json();
-    statusEl.textContent = "Error: " + (err.error || "unknown");
-    return;
+    // --- "Compare both": XTTS first, THEN F5 ---
+    // One after the other, not at the same time: both models share one Colab GPU,
+    // so running them together would make both slower and the timings unfair.
+    singleAudio.hidden = true;
+    compareBox.hidden = false;
+    const players = {
+      xtts: { audio: document.getElementById("audioXtts"), time: document.getElementById("timeXtts") },
+      f5:   { audio: document.getElementById("audioF5"),   time: document.getElementById("timeF5") },
+    };
+    for (const p of Object.values(players)) {
+      p.audio.removeAttribute("src");
+      p.time.textContent = "waiting...";
+    }
+
+    const report = [];
+    for (const eng of ["xtts", "f5"]) {
+      statusEl.textContent = `Generating with ${ENGINE_NAMES[eng]}...`;
+      players[eng].time.textContent = "generating...";
+      try {
+        const { audioSrc, seconds } = await requestSpeech(eng, text, emotion);
+        players[eng].audio.src = audioSrc;
+        players[eng].time.textContent = `took ${seconds.toFixed(1)}s`;
+        report.push(`${ENGINE_NAMES[eng]} ${seconds.toFixed(1)}s`);
+      } catch (err) {
+        // one engine failing shouldn't stop the other from being tried
+        players[eng].time.textContent = "failed: " + err.message;
+        report.push(`${ENGINE_NAMES[eng]} failed`);
+      }
+    }
+    statusEl.textContent = "Compare done: " + report.join(", ") + ". Press play on each to listen.";
+  } finally {
+    speaking = false;
   }
-
-  const data = await res.json();
-  const audioEl = document.getElementById("outputAudio");
-  audioEl.src = "data:audio/wav;base64," + data.audio_base64;
-  audioEl.play();
-  statusEl.textContent = "Done.";
 };
 

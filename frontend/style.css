@@ -89,3 +89,31 @@ select {
   font-size: 13px;
   margin: 4px 0;
 }
+
+/* "Compare both" engines: two labelled audio players */
+.compare-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0;
+}
+
+.compare-item {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.compare-item audio {
+  display: block;
+  margin-top: 6px;
+  width: 100%;
+}
+
+.compare-time {
+  color: #555;
+  font-size: 13px;
+}
+
+/* the "hidden" attribute must win over display:flex above */
+[hidden] { display: none !important; }

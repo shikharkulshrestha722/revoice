@@ -113,12 +113,24 @@ async def voice_bank_status():
     return {e: len(c) for e, c in voice_bank.items()}
 
 
+# Voice engines the Colab notebook understands:
+#   "xtts" = XTTS-v2 (default), "f5" = F5-TTS
+SUPPORTED_ENGINES = ("xtts", "f5")
+
+
 @app.post("/speak")
-async def speak(text: str = Form(...), emotion: str = Form(...)):
+async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("xtts")):
     """
     Takes the composed sentence + chosen emotion, finds the matching
-    reference voice clip, and asks the Colab API to generate speech.
+    reference voice clip, and asks the Colab API to generate speech
+    with the chosen engine.
     """
+    if engine not in SUPPORTED_ENGINES:
+        return JSONResponse(
+            {"error": f"Unknown engine '{engine}'. Use one of: {', '.join(SUPPORTED_ENGINES)}."},
+            status_code=400,
+        )
+
     clips = voice_bank.get(emotion) or []
     if not clips:
         return JSONResponse(
@@ -127,7 +139,7 @@ async def speak(text: str = Form(...), emotion: str = Form(...)):
         )
 
     spoken_text = prepare_text_for_speech(text, emotion)
-    print(f"[speak] {text!r} -> {spoken_text!r} using {len(clips)} reference clip(s)")
+    print(f"[speak:{engine}] {text!r} -> {spoken_text!r} using {len(clips)} reference clip(s)")
 
     payload = {
         "text": spoken_text,
@@ -135,6 +147,7 @@ async def speak(text: str = Form(...), emotion: str = Form(...)):
         "speaker_wav_base64_list": clips,        # all clips = better cloning
         "language": "en",
         "emotion": emotion,                      # lets Colab adjust speed/expressiveness
+        "engine": engine,                        # which voice model Colab should use
     }
 
     try:
