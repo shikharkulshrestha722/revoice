@@ -9,9 +9,10 @@
 #      pass the generated audio back to the webpage
 # ============================================================
 
-from fastapi import FastAPI, UploadFile, Form
+from fastapi import FastAPI, UploadFile, Form, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
 import requests
 import base64
 import os
@@ -19,22 +20,39 @@ import re
 
 from predictor import get_suggestions
 
+# ------------------------------------------------------------
+# SETTINGS come from backend/.env (copy .env.example to .env).
+# Keeping keys in .env means they never end up in git.
+# Real environment variables win over .env if both are set.
+# ------------------------------------------------------------
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+# Public URL of the Colab voice server (ngrok). Our free ngrok domain is
+# static, so this normally never changes.
+COLAB_API_URL = os.environ.get("COLAB_API_URL", "https://handcart-retrieval-mulch.ngrok-free.dev")
+
+# Gemini API key for phrase prediction (free key: https://aistudio.google.com/apikey).
+# If it's blank, prediction still works using an offline word list.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
 app = FastAPI()
 
-# ------------------------------------------------------------
-# IMPORTANT: update this every time you restart your Colab notebook
-# (ngrok gives a new URL each session unless you're on a paid plan)
-# ------------------------------------------------------------
-COLAB_API_URL = "https://handcart-retrieval-mulch.ngrok-free.dev"
 
 # ------------------------------------------------------------
-# Gemini API key for phrase prediction.
-# Get a free key at https://aistudio.google.com/apikey
-# Either paste it below, or set it as an environment variable.
-# If it's left blank, prediction still works using an offline word list.
+# NO-CACHE for the webpage files.
+# Without this the browser sometimes keeps running an OLD app.js
+# after we edit it. API replies are left alone.
 # ------------------------------------------------------------
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "PASTE_YOUR_GEMINI_KEY_HERE")
-GEMINI_MODEL = "gemini-2.5-flash"
+API_PATHS = ("/predict", "/speak", "/upload_voice_clip", "/voice_bank")
+
+
+@app.middleware("http")
+async def no_cache_for_frontend(request: Request, call_next):
+    response = await call_next(request)
+    if not request.url.path.startswith(API_PATHS):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+    return response
 
 
 def call_gemini(prompt: str) -> str:
@@ -85,7 +103,7 @@ def prepare_text_for_speech(text: str, emotion: str = "neutral") -> str:
 @app.post("/predict")
 async def predict(text: str = Form("")):
     """Suggests 3 likely sentences based on what has been typed so far."""
-    key_is_set = GEMINI_API_KEY and not GEMINI_API_KEY.startswith("PASTE_")
+    key_is_set = bool(GEMINI_API_KEY) and not GEMINI_API_KEY.startswith("PASTE_")
     result = get_suggestions(text, call_gemini=call_gemini if key_is_set else None)
     return result
 

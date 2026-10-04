@@ -2,3 +2,8 @@ fastapi
 uvicorn
 python-multipart
 requests
+python-dotenv
+
+# for running the tests (py -3.10 -m pytest)
+pytest
+httpx
