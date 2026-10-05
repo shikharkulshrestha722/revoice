@@ -74,7 +74,8 @@ node --test "frontend/tests/*.test.mjs"
 4. Pick an emotion, click **Record Voice Clip**, and speak naturally in that tone
    (6–20 s; click again to stop early). 2–3 clips per emotion works best.
 5. **Guided voice banking** (optional, for a better voice): click *Guided voice banking*
-   and read the sentences one at a time (<kbd>Space</kbd> record/stop, <kbd>→</kbd> skip,
+   and read the sentences one at a time. There are 350 (about 25-30 minutes), split into
+   7 sessions of 50 so you can spread them over several sittings (<kbd>Space</kbd> record/stop, <kbd>→</kbd> skip,
    <kbd>←</kbd> back, <kbd>P</kbd> play). It remembers where you stopped. Too-quiet or
    distorted takes are flagged so you can redo them.
    - *Use my best recordings as voice references*: speech then works for every emotion
@@ -84,6 +85,20 @@ node --test "frontend/tests/*.test.mjs"
      .webm clips and the Colab fine-tuning notebook converts them.
 6. Pick a voice engine — **XTTS-v2**, **F5-TTS**, or **Compare both** (generates with
    each, one after the other, and shows how long each took) — then **Generate & Speak**.
+
+## Evidence for the report
+
+- **Selection counter** (under the composed text): pointer selections used for the
+  current sentence vs. spelling it letter by letter (one selection per letter and per
+  space), and the % saved by predictions. Resets when you press **Clear**.
+- **Generation log**: every *Generate & Speak* adds a line to
+  `backend/data/generation_log.csv` (time, engine, emotion, voice source, text length in
+  characters and words, generation time, success/failure, selection counts). The sentence
+  itself is not stored.
+- **Summary**: `cd backend; py -3.10 report.py` prints average generation time per engine
+  and the average selections saved. The same numbers are at
+  http://localhost:8000/stats/summary while the server runs.
+  "Compare both" or speaking a sentence twice counts that sentence once for the savings.
 
 ## Known limitations (honest, worth mentioning in the report)
 

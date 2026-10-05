@@ -40,6 +40,8 @@ frontend/   index.html, style.css
                          ("both" runs sequentially — one shared GPU — and shows timings)
             tracking.js  PURE logic, no DOM (keep it that way so it stays testable):
                          OneEuroFilter, PointerTracker, detectLaserBlob, DwellSelector
+            selection_stats.js PURE: selections vs letter-by-letter (letters + single
+                         spaces), same rule as generation_log.py
             audio_checks.js PURE: analyzeLevels() flags too_quiet / clipping using the
                          90th-percentile 10 ms chunk RMS (a start click can't hide a quiet take)
             tests/       node:test tests for the pure JS modules
@@ -58,7 +60,12 @@ backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select
                          skipped, references). /speak uses guided references when an
                          emotion has no clips. pick_references = longest takes to ~30 s
                          (XTTS concatenates refs and uses the first gpt_cond_len=30 s).
-            guided_sentences.py  150 sentences, ids g001..g150 — NEVER renumber; append only.
+            guided_sentences.py  350 sentences: g001-g150 short phrases, g151-g350 longer
+                         (12-20 words, no names/digits/abbreviations; tests enforce it).
+                         ~26 min of speech. NEVER renumber; append only. SESSION_SIZE=50.
+            generation_log.py    one CSV row per /speak call in data/generation_log.csv
+                         (no text stored); summarize() -> /stats/summary and report.py.
+                         Savings counted once per utterance_id (latest row).
             dataset_export.py    LJSpeech zip: metadata.csv `id|text|text`, no header, "
 "
                          endings; wavs/ (22050 mono) if ffmpeg on PATH, else raw/ webm
@@ -92,7 +99,8 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
 - [x] 1 User profiles + persistent voice bank, delete, switcher, Add user panel,
       stock XTTS speakers (notebook v5)
 - [x] 2 Guided voice banking (150 sentences, transcript per clip, LJSpeech zip export).
-      NOTE: 150 short sentences ≈ 6-8 min of audio, below the 15-30 min fine-tuning needs.
+      Extended to 350 sentences (~26 min) in sessions of 50.
+- [x] Report evidence (before Phase 3): generation log CSV, selection counter, report.py
 - [ ] 3 Fine-tune XTTS (colab/finetune_xtts.ipynb, checkpoints to Drive, engine "xtts_ft")
 - [ ] 4 Safety layer: Emergency Override, False Selection Guard, Ambiguous Phrase Check,
       Caregiver Validation (Confirm / Escalate / Override, toggleable)
