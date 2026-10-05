@@ -8,6 +8,7 @@
 // ============================================================
 
 import { PointerTracker, DwellSelector, detectLaserBlob } from "./tracking.js";
+import { analyzeLevels, PROBLEM_MESSAGES } from "./audio_checks.js";
 
 // MediaPipe is loaded later, only when Finger mode needs it.
 // That way, if it fails to download, the camera still works.
@@ -448,6 +449,7 @@ function renderProfiles() {
 // Stock-voice users have nothing to record and can only use XTTS.
 function applyProfileToVoiceControls() {
   const isStock = activeProfile?.voice_type === "stock";
+  if (guided.profileId && guided.profileId !== activeProfile?.id) closeGuidedPanel();
   const stockNote = document.getElementById("stockNote");
 
   document.getElementById("recordControls").hidden = isStock;
@@ -580,6 +582,20 @@ document.getElementById("createUserBtn").onclick = async () => {
     voiceType === "cloned" ? `Added ${name}. Now record a voice clip for each emotion.` : `Added ${name}.`;
 };
 
+// ---------- MICROPHONE (shared by both recorders) ----------
+// turn OFF browser "improvements" — they distort the voice and hurt cloning
+function getMicStream() {
+  return navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
+  });
+}
+
+function makeRecorder(stream) {
+  const options = { audioBitsPerSecond: 128000 };
+  if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) options.mimeType = "audio/webm;codecs=opus";
+  return new MediaRecorder(stream, options);
+}
+
 // ---------- VOICE BANK RECORDING ----------
 const RECORD_SECONDS = 20;   // longer clips = more accurate voice cloning
 let activeRecorder = null;   // so a second click can stop recording early
@@ -596,9 +612,15 @@ async function updateVoiceBankStatus() {
     const counts = await res.json();
     const emotion = document.getElementById("emotion").value;
     const n = counts[emotion] || 0;
+    let usingRefs = false;
+    if (n === 0) {
+      const g = await (await fetch(`/guided/status?profile_id=${encodeURIComponent(activeProfile.id)}`)).json();
+      usingRefs = (g.references || []).length > 0;
+    }
     statusEl.textContent =
-      n === 0 ? `No clips yet for "${emotion}" (${activeProfile.name}).`
-              : `${n} clip(s) saved for "${emotion}" (${activeProfile.name}). 2-3 gives the best result.`;
+      n > 0 ? `${n} clip(s) saved for "${emotion}" (${activeProfile.name}). 2-3 gives the best result.`
+      : usingRefs ? `No "${emotion}" clip yet, so your guided recordings will be used (${activeProfile.name}).`
+      : `No clips yet for "${emotion}" (${activeProfile.name}).`;
   } catch (err) { /* ignore */ }
 }
 
@@ -622,15 +644,8 @@ document.getElementById("recordBtn").onclick = async () => {
   // remember WHO we're recording now, in case the user is switched mid-recording
   const profileId = activeProfile.id;
 
-  // turn OFF browser "improvements" — they distort the voice and hurt cloning
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
-  });
-
-  const options = { audioBitsPerSecond: 128000 };
-  if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) options.mimeType = "audio/webm;codecs=opus";
-
-  const recorder = new MediaRecorder(stream, options);
+  const stream = await getMicStream();
+  const recorder = makeRecorder(stream);
   activeRecorder = recorder;
   const chunks = [];
   const startTime = performance.now();
@@ -770,6 +785,262 @@ document.getElementById("speakBtn").onclick = async () => {
   }
 };
 
+
+// ---------- GUIDED VOICE BANKING ----------
+// The person reads one sentence at a time. Each take is uploaded with the
+// sentence id, so the server stores it next to its EXACT words.
+// Set up by the person banking their voice (or a caregiver), so mouse +
+// keyboard is fine here.
+const GUIDED_MAX_SECONDS = 15;   // sentences are short; stop automatically after this
+const guided = {
+  sentences: [],        // [{id, text}] from the server
+  status: null,         // progress from the server
+  index: 0,             // which sentence is on screen
+  stream: null,         // microphone, kept open while the panel is open (no delay before each take)
+  recorder: null,
+  profileId: null,      // who we're recording; fixed while the panel is open
+  lastTakeUrl: null,    // the take just recorded, for instant playback
+};
+const guidedEl = (id) => document.getElementById(id);
+
+async function openGuidedPanel() {
+  if (!activeProfile || activeProfile.voice_type !== "cloned") return;
+  guided.profileId = activeProfile.id;
+  guidedEl("guidedPanel").hidden = false;
+  guidedEl("guidedStatus").textContent = "Loading...";
+  guidedEl("guidedPanel").scrollIntoView({ behavior: "smooth" });
+
+  try {
+    if (!guided.sentences.length) {
+      guided.sentences = (await (await fetch("/guided/sentences")).json()).sentences;
+    }
+    await refreshGuidedStatus();
+    // resume where they left off: the first sentence not yet recorded
+    const resumeAt = guided.sentences.findIndex((s) => s.id === guided.status.next_id);
+    guided.index = resumeAt >= 0 ? resumeAt : guided.sentences.length - 1;
+    guided.stream = await getMicStream();
+    guidedEl("guidedStatus").textContent = guided.status.count
+      ? `Welcome back, ${activeProfile.name}. Carrying on where you left off.`
+      : "Press Record (or Space), read the sentence, then press Stop.";
+  } catch (err) {
+    console.error(err);
+    guidedEl("guidedStatus").textContent = "Could not start: " + (err.message || err.name) +
+      " (allow the microphone and make sure the backend is running).";
+  }
+  showGuidedSentence();
+}
+
+function closeGuidedPanel() {
+  if (guided.recorder && guided.recorder.state === "recording") {
+    guided.recorder.onstop = null;          // closing = throw this take away
+    guided.recorder.stop();
+  }
+  if (guided.stream) guided.stream.getTracks().forEach((t) => t.stop());
+  guided.stream = null;
+  guided.recorder = null;
+  guided.profileId = null;
+  guidedEl("guidedPanel").hidden = true;
+  updateVoiceBankStatus();                  // references may have changed
+}
+
+async function refreshGuidedStatus() {
+  const res = await fetch(`/guided/status?profile_id=${encodeURIComponent(guided.profileId)}`);
+  guided.status = await res.json();
+  if (!res.ok) throw new Error(guided.status.error || res.status);
+  showGuidedProgress();
+}
+
+function showGuidedProgress() {
+  const st = guided.status;
+  const minutes = st.total_seconds / 60;
+  guidedEl("guidedBar").style.width = `${(100 * st.count) / st.total_sentences}%`;
+  guidedEl("guidedCounts").textContent =
+    `${st.count} / ${st.total_sentences} recorded · ${minutes.toFixed(1)} minutes of speech` +
+    (st.skipped.length ? ` · ${st.skipped.length} skipped` : "") +
+    " (fine-tuning needs 15-30 minutes; voice references need about half a minute)";
+  guidedEl("guidedExportBtn").disabled = st.count === 0;
+  guidedEl("guidedRefsBtn").disabled = st.count === 0;
+
+  const refSeconds = st.references.reduce((sum, id) => sum + (st.recorded[id]?.duration_s || 0), 0);
+  guidedEl("guidedRefsStatus").textContent = st.references.length
+    ? `Using ${st.references.length} recordings (${refSeconds.toFixed(0)}s) as voice references ` +
+      "for any emotion that has no clip of its own."
+    : "Tip: after 8-10 sentences, use them as voice references so speech works without separate clips.";
+}
+
+function showGuidedSentence() {
+  const s = guided.sentences[guided.index];
+  if (!s) return;
+  const done = guided.status?.recorded[s.id];
+  guidedEl("guidedSentence").textContent = s.text;
+  guidedEl("guidedSentence").classList.toggle("recorded", !!done);
+  guidedEl("guidedSentenceId").textContent =
+    `Sentence ${guided.index + 1} of ${guided.sentences.length}` +
+    (done ? ` · recorded (${done.duration_s.toFixed(1)}s) — press Record to redo` : "");
+  guidedEl("guidedRecordBtn").innerHTML = done ? "&#9679; Redo" : "&#9679; Record";
+  guidedEl("guidedPlayBtn").disabled = !done;
+  guidedEl("guidedPrevBtn").disabled = guided.index === 0;
+  guided.lastTakeUrl = null;
+}
+
+function goToGuided(index) {
+  if (guided.recorder && guided.recorder.state === "recording") return;   // finish the take first
+  guided.index = Math.max(0, Math.min(guided.sentences.length - 1, index));
+  guidedEl("guidedStatus").textContent = "";
+  guidedEl("guidedStatus").classList.remove("warn");
+  showGuidedSentence();
+}
+
+// after a good take: jump to the next sentence still to do (or just the next one)
+function goToNextGuided() {
+  const nextId = guided.status.next_id;
+  const i = guided.sentences.findIndex((s) => s.id === nextId);
+  if (nextId === null) {
+    guidedEl("guidedStatus").textContent = "All sentences recorded. Thank you! You can download the dataset now.";
+    return;
+  }
+  goToGuided(i > guided.index ? i : guided.index + 1);
+}
+
+// Decodes the take and checks its loudness (see audio_checks.js)
+async function checkTake(blob) {
+  try {
+    const ctx = new AudioContext();
+    const audio = await ctx.decodeAudioData(await blob.arrayBuffer());
+    ctx.close();
+    return analyzeLevels(audio.getChannelData(0)).problems;
+  } catch (err) {
+    console.warn("could not check recording level", err);
+    return [];   // can't check = don't block the person
+  }
+}
+
+function toggleGuidedRecording() {
+  if (!guided.stream) return;
+  const btn = guidedEl("guidedRecordBtn");
+  const statusEl = guidedEl("guidedStatus");
+
+  // second press = stop
+  if (guided.recorder && guided.recorder.state === "recording") {
+    guided.recorder.stop();
+    return;
+  }
+
+  const sentence = guided.sentences[guided.index];
+  const profileId = guided.profileId;
+  const recorder = makeRecorder(guided.stream);
+  guided.recorder = recorder;
+  const chunks = [];
+  const startTime = performance.now();
+  const autoStop = setTimeout(() => recorder.state === "recording" && recorder.stop(), GUIDED_MAX_SECONDS * 1000);
+
+  recorder.ondataavailable = (e) => chunks.push(e.data);
+  recorder.onstop = async () => {
+    clearTimeout(autoStop);
+    btn.classList.remove("recording");
+    guidedEl("guidedSentence").classList.remove("recording");
+    const seconds = (performance.now() - startTime) / 1000;
+    if (seconds < 0.7) {
+      statusEl.textContent = "That was too short. Press Record, read the sentence, then Stop.";
+      showGuidedSentence();
+      return;
+    }
+
+    const blob = new Blob(chunks, { type: "audio/webm" });
+    const problems = await checkTake(blob);
+
+    statusEl.textContent = "Saving...";
+    const formData = new FormData();
+    formData.append("sentence_id", sentence.id);
+    formData.append("duration_s", seconds.toFixed(2));
+    formData.append("profile_id", profileId);
+    formData.append("file", blob, `${sentence.id}.webm`);
+    const res = await fetch("/guided/record", { method: "POST", body: formData });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      statusEl.textContent = "Save failed: " + (data.error || res.status);
+      showGuidedSentence();
+      return;
+    }
+    guided.status = data;
+    showGuidedProgress();
+
+    if (problems.length) {
+      // keep the take (it's saved) but stay here so they can redo it
+      showGuidedSentence();
+      guided.lastTakeUrl = URL.createObjectURL(blob);
+      statusEl.textContent = "Saved, but: " + problems.map((p) => PROBLEM_MESSAGES[p]).join(" ");
+      statusEl.classList.add("warn");
+    } else {
+      statusEl.textContent = `Saved (${seconds.toFixed(1)}s).`;
+      statusEl.classList.remove("warn");
+      setTimeout(goToNextGuided, 500);      // short pause, then the next sentence
+    }
+  };
+
+  recorder.start();
+  btn.innerHTML = "&#9632; Stop";
+  btn.classList.add("recording");
+  guidedEl("guidedSentence").classList.add("recording");
+  statusEl.classList.remove("warn");
+  statusEl.textContent = "Recording... read the sentence, then press Stop (or Space).";
+}
+
+function playGuided() {
+  const s = guided.sentences[guided.index];
+  const audioEl = guidedEl("guidedAudio");
+  if (guided.lastTakeUrl) audioEl.src = guided.lastTakeUrl;
+  else if (guided.status?.recorded[s.id]) {
+    // the time stamp stops the browser playing an old take after a redo
+    audioEl.src = `/guided/audio/${s.id}?profile_id=${encodeURIComponent(guided.profileId)}&t=${Date.now()}`;
+  } else return;
+  audioEl.play();
+}
+
+async function skipGuided() {
+  if (guided.recorder && guided.recorder.state === "recording") return;
+  const s = guided.sentences[guided.index];
+  if (!guided.status.recorded[s.id]) {
+    const formData = new FormData();
+    formData.append("sentence_id", s.id);
+    formData.append("profile_id", guided.profileId);
+    const res = await fetch("/guided/skip", { method: "POST", body: formData });
+    if (res.ok) { guided.status = await res.json(); showGuidedProgress(); }
+  }
+  goToGuided(guided.index + 1);
+}
+
+guidedEl("openGuidedBtn").onclick = openGuidedPanel;
+guidedEl("guidedCloseBtn").onclick = closeGuidedPanel;
+guidedEl("guidedRecordBtn").onclick = toggleGuidedRecording;
+guidedEl("guidedPlayBtn").onclick = playGuided;
+guidedEl("guidedSkipBtn").onclick = skipGuided;
+guidedEl("guidedPrevBtn").onclick = () => goToGuided(guided.index - 1);
+
+guidedEl("guidedExportBtn").onclick = () => {
+  // the server replies with a zip "attachment", so this downloads instead of navigating away
+  window.location.href = `/profiles/${encodeURIComponent(guided.profileId)}/export`;
+};
+
+guidedEl("guidedRefsBtn").onclick = async () => {
+  const formData = new FormData();
+  formData.append("profile_id", guided.profileId);
+  const res = await fetch("/guided/references", { method: "POST", body: formData });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { guidedEl("guidedRefsStatus").textContent = "Error: " + (data.error || res.status); return; }
+  guided.status = data;
+  showGuidedProgress();
+};
+
+// keyboard shortcuts, only while the panel is open and you're not typing in a box
+document.addEventListener("keydown", (e) => {
+  const typing = e.target instanceof Element && e.target.matches("input, select, textarea");
+  if (guidedEl("guidedPanel").hidden || typing) return;
+  if (e.code === "Space") { e.preventDefault(); toggleGuidedRecording(); }
+  else if (e.key === "ArrowRight") skipGuided();
+  else if (e.key === "ArrowLeft") goToGuided(guided.index - 1);
+  else if (e.key.toLowerCase() === "p") playGuided();
+});
 
 // ---------- START ----------
 // Runs last, so everything above is defined before we load the users.

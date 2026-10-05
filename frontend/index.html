@@ -91,6 +91,8 @@
       <span id="recordControls">
         <button id="recordBtn">Record Voice Clip (up to 20s)</button>
         <span id="recordStatus"></span>
+        <br />
+        <button id="openGuidedBtn">Guided voice banking (read sentences)</button>
       </span>
       <p id="stockNote" class="hint" hidden></p>
 
@@ -120,6 +122,39 @@
       <p id="speakStatus"></p>
     </div>
 
+  </div>
+
+  <!-- GUIDED VOICE BANKING: read sentences one at a time.
+       Each take is saved with its exact words (training data for fine-tuning). -->
+  <div id="guidedPanel" class="panel guided" hidden>
+    <h2>Guided voice banking</h2>
+    <p class="hint">
+      Read each sentence in your normal voice, as if you were saying it to someone.
+      Keyboard: <kbd>Space</kbd> record / stop &middot; <kbd>&rarr;</kbd> skip &middot;
+      <kbd>&larr;</kbd> back &middot; <kbd>P</kbd> play
+    </p>
+
+    <div class="guided-progress"><div id="guidedBar" class="guided-bar"></div></div>
+    <p id="guidedCounts" class="guided-counts"></p>
+
+    <p id="guidedSentenceId" class="hint"></p>
+    <div id="guidedSentence" class="guided-sentence"></div>
+
+    <div class="controls-row">
+      <button id="guidedPrevBtn">&larr; Back</button>
+      <button id="guidedRecordBtn" class="primary">&#9679; Record</button>
+      <button id="guidedPlayBtn">&#9654; Play</button>
+      <button id="guidedSkipBtn">Skip &rarr;</button>
+    </div>
+    <p id="guidedStatus" class="guided-status"></p>
+    <audio id="guidedAudio"></audio>
+
+    <div class="controls-row guided-footer">
+      <button id="guidedExportBtn">Download dataset (.zip)</button>
+      <button id="guidedRefsBtn">Use my best recordings as voice references</button>
+      <button id="guidedCloseBtn">Close</button>
+    </div>
+    <p id="guidedRefsStatus" class="hint"></p>
   </div>
 
   <script type="module" src="app.js"></script>
