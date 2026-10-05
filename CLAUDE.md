@@ -40,6 +40,7 @@ frontend/   index.html, style.css
                          ("both" runs sequentially — one shared GPU — and shows timings)
             tracking.js  PURE logic, no DOM (keep it that way so it stays testable):
                          OneEuroFilter, PointerTracker, detectLaserBlob, DwellSelector
+            metrics_format.js PURE: metrics -> lines under players; moreSimilarEngine()
             selection_stats.js PURE: selections vs letter-by-letter (letters + single
                          spaces), same rule as generation_log.py
             audio_checks.js PURE: analyzeLevels() flags too_quiet / clipping using the
@@ -53,6 +54,9 @@ backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select
                          profile_id is given. prepare_text_for_speech() fixes ALL CAPS and
                          adds emotion punctuation. No-cache middleware for frontend files
                          (add new API prefixes to API_PATHS). StaticFiles mounted LAST.
+                         Endpoints that call Colab/Gemini MUST be plain `def` (worker thread),
+                         never `async def` — blocking calls there freeze the whole server
+                         (tests/test_no_freeze.py guards this).
             profiles.py  ProfileStore: data/profiles/<id>/profile.json + clips/<emotion>/
                          000001.webm... (newest 3 kept). data/settings.json = selected user.
                          Ids are validated (SAFE_ID) because they become folder names.

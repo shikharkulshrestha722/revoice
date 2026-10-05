@@ -30,8 +30,10 @@ revoice/
 5. Optional: **Step 4b** — upload a recording and hear XTTS/F5 clone it with the exact
    API code. Gibberish here too = install problem; fine here but bad in the app = the
    app's reference clips are the problem.
+   Step 3c loads two small models that only MEASURE results (speaker similarity and an
+   English accent estimate).
 6. Paste your ngrok token (https://dashboard.ngrok.com/get-started/your-authtoken) in Step 5.
-7. Run Step 6. The last line must say **ReVoice API v6**.
+7. Run Step 6. The last line must say **ReVoice API v7**.
 
 Our free ngrok domain is static, so the URL stays the same every session:
 `https://handcart-retrieval-mulch.ngrok-free.dev`
@@ -99,8 +101,15 @@ node --test "frontend/tests/*.test.mjs"
   `backend/data/generation_log.csv` (time, engine, emotion, voice source, text length in
   characters and words, generation time, success/failure, selection counts). The sentence
   itself is not stored.
+- **Voice metrics** (under each player, measured on Colab for every sentence):
+  *similarity* to the real voice (speaker-embedding cosine, 0-1, higher = more alike),
+  average *pitch* and range, *speaking rate* (words per second of actual speech) and an
+  *estimated* English *accent* with confidence, for the real voice and the output.
+  Compare mode highlights the engine with the higher similarity. The accent model is an
+  estimate trained on 16 English accents — treat it as an indication, not a fact.
 - **Summary**: `cd backend; py -3.10 report.py` prints average generation time per engine
-  and the average selections saved. The same numbers are at
+  and the average selections saved, plus average similarity and accent-match rate per
+  engine. The same numbers are at
   http://localhost:8000/stats/summary while the server runs.
   "Compare both" or speaking a sentence twice counts that sentence once for the savings.
 
@@ -110,7 +119,7 @@ node --test "frontend/tests/*.test.mjs"
   Fine for a prototype; a real product would encrypt them.
 - **Laser detection needs decent lighting and a bright red dot** — red clothing or very
   bright rooms can confuse simple colour thresholding.
-- **Colab free tier disconnects** after inactivity; re-run Steps 3, 3b, 4a, 5 and 6.
+- **Colab free tier disconnects** after inactivity; re-run Steps 3, 3b, 3c, 4a, 5 and 6.
 - **F5-TTS uses one reference clip** (the longest, trimmed to 12 s or less at a pause) plus a
   Whisper transcript of it, shown under the F5 player. If the transcript is wrong, F5's
   output suffers: re-record that clip more clearly.
