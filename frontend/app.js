@@ -39,6 +39,38 @@ const composedTextEl = document.getElementById("composedText");
 const trackModeEl = document.getElementById("trackMode");
 const trackStatusEl = document.getElementById("trackStatus");
 
+// ---------- THEME (light / dark) ----------
+// Default: follow the system setting. Pressing the header button picks one
+// and remembers it (index.html applies the saved choice before the page draws).
+const THEME_KEY = "revoice-theme";
+const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
+const themeToggle = document.getElementById("themeToggle");
+
+function currentTheme() {
+  const chosen = document.documentElement.dataset.theme;
+  if (chosen === "light" || chosen === "dark") return chosen;
+  return systemDark.matches ? "dark" : "light";
+}
+
+function updateThemeToggle() {
+  const dark = currentTheme() === "dark";
+  themeToggle.querySelector(".icon").textContent = dark ? "☀" : "☾";   // sun / moon
+  themeToggle.querySelector(".label").textContent = dark ? "Light" : "Dark";
+  themeToggle.setAttribute("aria-pressed", String(dark));
+  themeToggle.setAttribute("aria-label", `Switch to ${dark ? "light" : "dark"} theme`);
+  document.dispatchEvent(new Event("revoice-themechange"));   // the camera overlay re-reads its colours
+}
+
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem(THEME_KEY, theme); } catch { /* not saved, still switches */ }
+  updateThemeToggle();
+}
+
+themeToggle.onclick = () => setTheme(currentTheme() === "dark" ? "light" : "dark");
+systemDark.addEventListener("change", updateThemeToggle);   // system switched while open
+updateThemeToggle();
+
 const scanCanvas = document.createElement("canvas");
 scanCanvas.width = SETTINGS.scanWidth;
 scanCanvas.height = SETTINGS.scanHeight;

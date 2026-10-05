@@ -10,6 +10,14 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" />
 <link rel="stylesheet" href="style.css" />
+<script>
+  // Apply a saved light/dark choice BEFORE the page is drawn, so there's no
+  // bright white flash at night. No saved choice = follow the system setting.
+  try {
+    var savedTheme = localStorage.getItem("revoice-theme");
+    if (savedTheme === "light" || savedTheme === "dark") document.documentElement.dataset.theme = savedTheme;
+  } catch (e) { /* storage blocked: just follow the system */ }
+</script>
 </head>
 <body>
 
@@ -19,6 +27,9 @@
       <h1>ReVoice</h1>
       <p class="subtitle">Point at letters &rarr; GenAI predicts the sentence &rarr; spoken in your own voice</p>
     </div>
+    <button id="themeToggle" class="theme-toggle" type="button" aria-pressed="false">
+      <span class="icon" aria-hidden="true">&#9790;</span><span class="label">Dark</span>
+    </button>
   </header>
 
   <!-- USER SWITCHER (caregiver uses the mouse here) -->
