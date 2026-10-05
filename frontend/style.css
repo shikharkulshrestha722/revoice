@@ -313,6 +313,22 @@ input[type="text"] {
 
 select { margin-right: var(--space-2); }
 
+/* the browser's "Choose files" button, made to look like our other buttons */
+input[type="file"] { font: inherit; color: var(--text-muted); margin: var(--space-2) 0; }
+input[type="file"]::file-selector-button {
+  font: inherit;
+  font-weight: 500;
+  min-height: var(--target);
+  padding: var(--space-2) var(--space-4);
+  margin-right: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+input[type="file"]::file-selector-button:hover { background: var(--surface-2); }
+
 input[type="checkbox"],
 input[type="radio"] {
   width: 18px;

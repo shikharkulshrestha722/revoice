@@ -105,6 +105,17 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
             archive/                  old notebooks — never run them (they broke things)
 ```
 
+## UI rules (redesign, tags pre-ui -> main)
+- All colours are CSS variables on :root (light) + dark blocks for `[data-theme="dark"]`
+  and `prefers-color-scheme: dark` (keep both dark blocks identical). The camera overlay
+  reads `--canvas-*` via readOverlayColors() — only at start and on "revoice-themechange",
+  never per frame.
+- Animations: transform/opacity only; everything off under prefers-reduced-motion
+  (`reducedMotion` in app.js for JS-driven ones). Never hide or delay error messages:
+  toasts are extra, status text stays; error toasts don't auto-dismiss.
+- Patient targets stay large; text contrast WCAG AA in both themes (checked by script).
+- Loop cost baseline ~2.5 ms/frame (laser mode, fake camera); re-measure after overlay changes.
+
 ## Hard-won constraints (do NOT change)
 - Colab runs Python 3.13. coqui-tts 0.27.5 needs transformers >=4.57, but transformers 5.x
   removed `isin_mps_friendly`. Install order must stay:

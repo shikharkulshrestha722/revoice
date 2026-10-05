@@ -94,6 +94,22 @@ node --test "frontend/tests/*.test.mjs"
 6. Pick a voice engine — **F5-TTS** (default), **XTTS-v2**, or **Compare both** (generates with
    each, one after the other, and shows how long each took) — then **Generate & Speak**.
 
+## Look and feel
+
+- **Light and dark themes.** The page follows the computer's setting; the sun/moon button
+  in the header switches and remembers the choice. The dark theme is meant for the bedside
+  at night (no pure black/white glare). All text meets WCAG AA contrast in both themes.
+- **The composed sentence is the biggest thing on screen**, in Atkinson Hyperlegible (a font
+  made for low-vision readers; the system font is used if there's no internet).
+- **Camera overlay** colours follow the theme, with solid chips behind letters so they stay
+  readable over bright or dark video. The dwell ring glows as it fills and the chosen cell
+  flashes briefly, so the patient sees each selection.
+- **Animations are small and use only transform/opacity**; with the system's "reduce
+  motion" setting they are switched off. Measured cost of the camera loop: about 2.5 ms
+  per frame, the same as before the redesign.
+- **Toasts** (bottom right) confirm actions; error toasts stay until closed, and the normal
+  status text is always shown as well.
+
 ## Upload old recordings (for someone who has already lost their voice)
 
 In the Voice Bank section click **Upload old recordings** (or create the user with
