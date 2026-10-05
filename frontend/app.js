@@ -44,6 +44,30 @@ const trackStatusEl = document.getElementById("trackStatus");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 const scrollMotion = () => (reducedMotion.matches ? "auto" : "smooth");
 
+// ---------- TOASTS ----------
+// Small notices in the bottom-right corner. They are EXTRA: the normal status
+// text is still shown too. Success notices go away after 4 s; errors stay until
+// the caregiver closes them, so an error can never be missed.
+function showToast(message, type = "success") {
+  const box = document.getElementById("toasts");
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.setAttribute("role", type === "error" ? "alert" : "status");
+  const text = document.createElement("span");
+  text.textContent = message;
+  const close = document.createElement("button");
+  close.className = "toast-close";
+  close.setAttribute("aria-label", "Dismiss");
+  close.textContent = "\u00D7";
+  close.onclick = () => toast.remove();
+  toast.append(text, close);
+  box.appendChild(toast);
+  if (type !== "error") setTimeout(() => toast.remove(), 4000);
+  // keep at most 4 on screen: drop the oldest NON-error first
+  const all = [...box.children];
+  if (all.length > 4) (all.find((t) => !t.classList.contains("toast-error")) || all[0]).remove();
+}
+
 // ---------- THEME (light / dark) ----------
 // Default: follow the system setting. Pressing the header button picks one
 // and remembers it (index.html applies the saved choice before the page draws).
@@ -647,11 +671,13 @@ document.getElementById("deleteUserBtn").onclick = async () => {
   await loadProfiles();
   if (!res.ok) {
     statusEl.textContent = "Delete failed: " + (data.error || res.status);
+    showToast(statusEl.textContent, "error");
     return;
   }
   statusEl.textContent = data.colab_cache_cleared
     ? `Deleted "${name}" and their recordings. Colab has forgotten the voice too.`
     : `Deleted "${name}" and their recordings. (Colab was offline; its copy disappears when it restarts.)`;
+  showToast(`Deleted "${name}" and their recordings.`);
 };
 
 // ---------- ADD USER PANEL ----------
@@ -746,6 +772,7 @@ document.getElementById("createUserBtn").onclick = async () => {
     voiceType === "cloned" ? `Added ${name}. Now record a voice clip for each emotion.`
     : voiceType === "upload" ? `Added ${name}. Now add their old recordings below.`
     : `Added ${name}.`;
+  showToast(`Added ${name}.`);
   if (voiceType === "upload") openUploadPanel();
 };
 
@@ -850,10 +877,12 @@ document.getElementById("recordBtn").onclick = async () => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       statusEl.textContent = "Upload failed: " + (data.error || res.status);
+      showToast(statusEl.textContent, "error");
       return;
     }
     statusEl.textContent =
       `Saved ${seconds.toFixed(0)}s clip. ${data.clips} clip(s) for "${data.emotion}". 2-3 gives the best result.`;
+    showToast(`Voice clip saved for "${data.emotion}".`);
   };
 
   recorder.start();
@@ -960,6 +989,7 @@ document.getElementById("speakBtn").onclick = async () => {
         statusEl.textContent = `Done in ${seconds.toFixed(1)}s (${ENGINE_NAMES[engine]}).`;
       } catch (err) {
         statusEl.textContent = "Error: " + err.message;
+        showToast("Speech failed: " + err.message, "error");
       }
       return;
     }
@@ -1003,6 +1033,7 @@ document.getElementById("speakBtn").onclick = async () => {
         // one engine failing shouldn't stop the other from being tried
         players[eng].time.textContent = "failed: " + err.message;
         report.push(`${ENGINE_NAMES[eng]} failed`);
+        showToast(`${ENGINE_NAMES[eng]} failed: ${err.message}`, "error");
       }
     }
     // highlight the engine whose voice was measured as closer to the real person
@@ -1012,6 +1043,7 @@ document.getElementById("speakBtn").onclick = async () => {
       players[winner].badge.hidden = false;
     }
     statusEl.textContent = "Compare done: " + report.join(", ") + ". Press play on each to listen.";
+    if (winner) showToast(`Compare done: ${ENGINE_NAMES[winner]} sounded more like the real voice.`);
   } finally {
     speaking = false;
     document.getElementById("speakBusy").hidden = true;
@@ -1250,6 +1282,7 @@ function toggleGuidedRecording() {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       statusEl.textContent = "Save failed: " + (data.error || res.status);
+      showToast(statusEl.textContent, "error");
       showGuidedSentence();
       return;
     }
@@ -1590,6 +1623,8 @@ uploadEl("uploadSaveBtn").onclick = async () => {
   }
   uploadEl("uploadSaveBtn").disabled = false;
   statusEl.textContent = `Saved ${saved} of ${toSave.length} clip(s).`;
+  if (saved === toSave.length) showToast(`Saved ${saved} recording(s).`);
+  else showToast(`${toSave.length - saved} recording(s) could not be saved. See the list above.`, "error");
 };
 
 // ----- the clips already saved for this person -----
