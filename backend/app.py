@@ -22,7 +22,7 @@ import re
 import time
 
 from predictor import get_suggestions
-from profiles import ProfileStore, ProfileError, ProfileNotFound
+from profiles import ProfileStore, ProfileError, ProfileNotFound, MAX_UPLOAD_BYTES
 from guided_sentences import GUIDED_SENTENCES, SESSION_SIZE
 from dataset_export import build_dataset_zip
 from generation_log import log_generation, summarize
@@ -71,7 +71,7 @@ def call_colab(method: str, path: str, **kwargs):
 # after we edit it. API replies are left alone.
 # ------------------------------------------------------------
 API_PATHS = ("/predict", "/speak", "/upload_voice_clip", "/voice_bank",
-             "/profiles", "/stock_speakers", "/guided", "/stats")
+             "/profiles", "/stock_speakers", "/guided", "/stats", "/uploads")
 
 
 @app.middleware("http")
@@ -306,6 +306,38 @@ async def guided_clear_references(profile_id: str = ""):
     return store.guided_status(pid)
 
 
+# ------------------------------------------------------------
+# UPLOADED OLD RECORDINGS
+# For someone who has already lost their voice: old voice notes or videos.
+# The browser decodes the file, the caregiver trims out other people's
+# voices, and the browser sends a clean mono WAV of just that part.
+# ------------------------------------------------------------
+@app.get("/uploads")
+async def list_uploads(profile_id: str = ""):
+    return store.list_uploads(resolve_profile(profile_id)["id"])
+
+
+@app.post("/uploads")
+async def upload_recording(file: UploadFile = None, profile_id: str = Form(""),
+                           original_name: str = Form(""), start_s: float = Form(...),
+                           end_s: float = Form(...), speech_s: float = Form(0.0),
+                           consent: bool = Form(False), consented_by: str = Form("")):
+    """Saves one trimmed clip (checked in profiles.add_upload) and returns the updated list."""
+    if file is None:
+        raise ProfileError("No audio file was sent.")
+    pid = resolve_profile(profile_id)["id"]
+    data = await file.read(MAX_UPLOAD_BYTES + 1)     # never read more than the limit + 1 byte
+    clip = store.add_upload(pid, data, original_name=original_name, start_s=start_s, end_s=end_s,
+                            speech_s=speech_s, consent=consent, consented_by=consented_by)
+    print(f"[uploads] {pid}: saved {clip['original_name']} ({clip['duration_s']}s), consent by {clip['consented_by']}")
+    return {"saved": clip, **store.list_uploads(pid)}
+
+
+@app.delete("/uploads/{clip_id}")
+async def delete_uploaded_recording(clip_id: str, profile_id: str = ""):
+    return store.delete_upload(resolve_profile(profile_id)["id"], clip_id)
+
+
 @app.get("/profiles/{profile_id}/export")
 async def export_dataset(profile_id: str):
     """Downloads the user's guided recordings as an LJSpeech-style zip."""
@@ -383,11 +415,17 @@ def generate_speech(text, emotion, engine, profile_id, info):
         info["voice_source"] = "stock"
         print(f"[speak:{engine}] {text!r} -> {spoken_text!r} with stock voice {profile['stock_speaker']!r}")
     else:
+        # Which recordings to copy the voice from, in order of preference:
+        #   1. clips recorded for this emotion
+        #   2. uploaded old recordings (for someone who has lost their voice)
+        #   3. guided recordings chosen as references
+        # (with 2 and 3 the emotion still changes speed/expressiveness on Colab)
         raw_clips = store.get_clips(profile["id"], emotion)
         info["voice_source"] = "emotion_clips"
         if not raw_clips:
-            # no clip for this emotion: fall back to the guided recordings chosen as
-            # references (the emotion still changes speed/expressiveness on Colab)
+            raw_clips = store.get_upload_clips(profile["id"])
+            info["voice_source"] = "uploaded_recordings"
+        if not raw_clips:
             raw_clips = store.get_reference_clips(profile["id"])
             info["voice_source"] = "guided_references"
         if not raw_clips:

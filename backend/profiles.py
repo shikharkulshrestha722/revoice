@@ -8,6 +8,8 @@
 #       clips/<emotion>/      their recorded voice clips (newest 3 kept)
 #       guided/               guided voice banking: one clip per sentence +
 #                             manifest.json with the exact words of each
+#       uploads/              old recordings uploaded for someone who lost their
+#                             voice (+ manifest.json: trims, who consented, when)
 #
 # The currently selected user is remembered in data/settings.json,
 # so everything survives a backend restart.
@@ -15,10 +17,12 @@
 # Deleting a profile removes its whole folder: recordings included.
 # ============================================================
 
+import io
 import json
 import re
 import secrets
 import shutil
+import wave
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,12 +38,35 @@ SAFE_ID = re.compile(r"^[a-z0-9-]{1,64}$")
 AUDIO_EXTENSIONS = (".webm", ".wav", ".ogg", ".mp3", ".m4a")
 
 
+# ---- uploaded old recordings (decoded, trimmed and converted to WAV in the browser) ----
+UPLOAD_EXTENSIONS = {".mp3", ".m4a", ".wav", ".ogg", ".opus", ".webm", ".mp4"}   # original file types
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024    # per clip; 2 minutes of 24 kHz mono WAV is about 5.5 MB
+MIN_CLIP_SECONDS = 1.0
+MAX_CLIP_SECONDS = 120.0
+MAX_UPLOADED_CLIPS = 20
+MIN_TOTAL_SPEECH_SECONDS = 15.0       # less than this: cloning will probably sound poor
+UPLOAD_CONSENT_STATEMENT = ("I am this person or their family/legal guardian and "
+                            "have the right to use these recordings.")
+
+
 class ProfileError(ValueError):
     """A problem the user can fix (bad name, missing consent...). Shown as a 400 error."""
 
 
 class ProfileNotFound(LookupError):
     """No profile with that id. Shown as a 404 error."""
+
+
+def wav_duration(data: bytes) -> float:
+    """Length in seconds of a mono 16-bit WAV. Raises ProfileError if it isn't one."""
+    try:
+        with wave.open(io.BytesIO(data)) as w:
+            channels, width, rate, frames = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+    except (wave.Error, EOFError):
+        raise ProfileError("The converted audio isn't a valid WAV file.")
+    if channels != 1 or width != 2 or not (8000 <= rate <= 48000):
+        raise ProfileError("Expected mono 16-bit WAV audio between 8 and 48 kHz.")
+    return frames / rate
 
 
 def make_profile_id(name: str) -> str:
@@ -317,6 +344,117 @@ class ProfileStore:
         manifest["references"] = chosen
         self._write_manifest(profile_id, manifest)
         return chosen
+
+    # ---------- uploaded old recordings ----------
+    # For people who already lost their voice: old voice notes / videos, cut in the
+    # browser to just their voice and converted there to a clean mono WAV.
+    # data/profiles/<id>/uploads/000001.wav ...  + manifest.json with, for each clip:
+    # the original file name, the trim, durations, and WHO consented and WHEN.
+    def _uploads_dir(self, profile_id: str) -> Path:
+        return self._folder(profile_id) / "uploads"
+
+    def _read_uploads(self, profile_id: str) -> dict:
+        try:
+            m = json.loads((self._uploads_dir(profile_id) / "manifest.json").read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            m = {}
+        m.setdefault("clips", [])
+        return m
+
+    def _write_uploads(self, profile_id: str, manifest: dict):
+        folder = self._uploads_dir(profile_id)
+        folder.mkdir(exist_ok=True)
+        (folder / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    def add_upload(self, profile_id: str, wav_bytes: bytes, *, original_name: str, start_s: float,
+                   end_s: float, speech_s: float, consent: bool, consented_by: str) -> dict:
+        """Checks and saves one trimmed recording. Raises ProfileError with a clear reason."""
+        if self.get(profile_id)["voice_type"] != "cloned":
+            raise ProfileError("This user has a stock voice, so recordings aren't used.")
+        consented_by = " ".join((consented_by or "").split())
+        if not consent or not consented_by:
+            raise ProfileError("Consent is required: tick the box and enter your name.")
+        if len(consented_by) > 80:
+            raise ProfileError("Name is too long (max 80 characters).")
+
+        extension = Path(original_name or "").suffix.lower()
+        if extension not in UPLOAD_EXTENSIONS:
+            raise ProfileError(f"'{original_name}' is not a supported file type. "
+                               f"Use: {', '.join(sorted(UPLOAD_EXTENSIONS))}.")
+        if len(wav_bytes) > MAX_UPLOAD_BYTES:
+            raise ProfileError(f"Clip is too big (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB). Trim it shorter.")
+
+        duration = wav_duration(wav_bytes)            # raises ProfileError if not a proper WAV
+
+        # the trim must make sense and match the audio we actually received
+        if not (start_s >= 0 and end_s > start_s):
+            raise ProfileError("Trim end must be after trim start.")
+        length = end_s - start_s
+        if not (MIN_CLIP_SECONDS <= length <= MAX_CLIP_SECONDS):
+            raise ProfileError(f"Each clip must be {MIN_CLIP_SECONDS:g}-{MAX_CLIP_SECONDS:g} seconds long after trimming.")
+        if abs(duration - length) > 0.5:
+            raise ProfileError("The audio length doesn't match the trim. Please try again.")
+        if not (0 <= speech_s <= duration + 0.1):
+            raise ProfileError("Speech time must be between zero and the clip length.")
+
+        manifest = self._read_uploads(profile_id)
+        if len(manifest["clips"]) >= MAX_UPLOADED_CLIPS:
+            raise ProfileError(f"Up to {MAX_UPLOADED_CLIPS} uploaded clips per user. Delete some first.")
+        next_number = max((int(c["id"]) for c in manifest["clips"]), default=0) + 1
+        clip_id = f"{next_number:06d}"
+        folder = self._uploads_dir(profile_id)
+        folder.mkdir(exist_ok=True)
+        (folder / f"{clip_id}.wav").write_bytes(wav_bytes)
+
+        clip = {
+            "id": clip_id,
+            "original_name": Path(original_name).name[:120],
+            "trim_start_s": round(start_s, 2),
+            "trim_end_s": round(end_s, 2),
+            "duration_s": round(duration, 2),
+            "speech_s": round(min(speech_s, duration), 2),
+            "consented_by": consented_by,
+            "consent_statement": UPLOAD_CONSENT_STATEMENT,
+            "consented_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        manifest["clips"].append(clip)
+        self._write_uploads(profile_id, manifest)
+        return clip
+
+    def list_uploads(self, profile_id: str) -> dict:
+        clips = self._read_uploads(profile_id)["clips"]
+        speech = round(sum(c["speech_s"] for c in clips), 1)
+        return {
+            "clips": clips,
+            "total_seconds": round(sum(c["duration_s"] for c in clips), 1),
+            "total_speech_seconds": speech,
+            "enough_speech": speech >= MIN_TOTAL_SPEECH_SECONDS,
+            "min_total_speech_seconds": MIN_TOTAL_SPEECH_SECONDS,
+        }
+
+    def delete_upload(self, profile_id: str, clip_id: str) -> dict:
+        manifest = self._read_uploads(profile_id)
+        if clip_id not in [c["id"] for c in manifest["clips"]]:
+            raise ProfileNotFound(f"No uploaded clip '{clip_id}'.")
+        manifest["clips"] = [c for c in manifest["clips"] if c["id"] != clip_id]
+        (self._uploads_dir(profile_id) / f"{clip_id}.wav").unlink(missing_ok=True)
+        self._write_uploads(profile_id, manifest)
+        return self.list_uploads(profile_id)
+
+    def get_upload_clips(self, profile_id: str, target_seconds: float = 45.0, max_clips: int = 6) -> list:
+        """Uploaded clips to send to Colab as voice references: the ones with the most
+        speech first, until about 45 s (XTTS uses up to 30 s; F5 takes the longest clip).
+        Capped so each request through ngrok stays small."""
+        clips = sorted(self._read_uploads(profile_id)["clips"], key=lambda c: c["speech_s"], reverse=True)
+        out, total = [], 0.0
+        for c in clips[:max_clips]:
+            path = self._uploads_dir(profile_id) / f"{c['id']}.wav"
+            if path.is_file():
+                out.append(path.read_bytes())
+                total += c["duration_s"]
+            if total >= target_seconds:
+                break
+        return out
 
     def clear_references(self, profile_id: str):
         manifest = self._read_manifest(profile_id)
