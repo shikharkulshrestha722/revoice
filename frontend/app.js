@@ -39,6 +39,11 @@ const composedTextEl = document.getElementById("composedText");
 const trackModeEl = document.getElementById("trackMode");
 const trackStatusEl = document.getElementById("trackStatus");
 
+// ---------- MOTION ----------
+// People who set "reduce motion" on their computer get no decorative animation.
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const scrollMotion = () => (reducedMotion.matches ? "auto" : "smooth");
+
 // ---------- THEME (light / dark) ----------
 // Default: follow the system setting. Pressing the header button picks one
 // and remembers it (index.html applies the saved choice before the page draws).
@@ -62,9 +67,15 @@ function updateThemeToggle() {
 }
 
 function setTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  try { localStorage.setItem(THEME_KEY, theme); } catch { /* not saved, still switches */ }
-  updateThemeToggle();
+  const apply = () => {
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem(THEME_KEY, theme); } catch { /* not saved, still switches */ }
+    updateThemeToggle();
+  };
+  // a quick cross-fade between the old and new look (browser "view transition");
+  // instant if the browser can't, or if reduced motion is on
+  if (document.startViewTransition && !reducedMotion.matches) document.startViewTransition(apply);
+  else apply();
 }
 
 themeToggle.onclick = () => setTheme(currentTheme() === "dark" ? "light" : "dark");
@@ -233,6 +244,7 @@ function loop() {
 
     drawGrid(cell);
     drawSuggestionBar(cell);
+    drawSelectionFlash(now);
     if (pointer) drawPointer(pointer, progress);
   }
   requestAnimationFrame(loop);
@@ -357,6 +369,14 @@ function drawPointer(p, progress) {
   const end = -Math.PI / 2 + progress * 2 * Math.PI;
   ctx.beginPath();
   ctx.arc(p.x, p.y, 18, -Math.PI / 2, end);
+  // soft glow that grows as the ring fills (a wide, faint stroke: cheap, no blur filter)
+  if (progress > 0) {
+    ctx.globalAlpha = 0.35 * progress;
+    ctx.strokeStyle = overlayColors.pointer;
+    ctx.lineWidth = 6 + 10 * progress;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
   ctx.strokeStyle = overlayColors.gridOutline;
   ctx.lineWidth = 7;
   ctx.stroke();
@@ -476,11 +496,37 @@ function updateSelectionStats() {
 }
 
 // ---------- TEXT ----------
+// The selected cell lights up briefly, so the patient SEES that it was chosen.
+const FLASH_MS = 280;
+let flash = null;                 // { cell, start } of the last selection
+
+function cellRect(cell) {
+  const barH = SETTINGS.suggestionBarHeight;
+  if (cell >= 1000) {
+    const w = overlay.width / SETTINGS.suggestionCount;
+    return [(cell - 1000) * w, 0, w, barH];
+  }
+  const cellW = overlay.width / GRID_COLS, cellH = (overlay.height - barH) / GRID_ROWS;
+  return [(cell % GRID_COLS) * cellW, barH + Math.floor(cell / GRID_COLS) * cellH, cellW, cellH];
+}
+
+function drawSelectionFlash(now) {
+  if (!flash) return;
+  const elapsed = now - flash.start;
+  if (elapsed > FLASH_MS) { flash = null; return; }
+  // fades out normally; with reduced motion it's a steady highlight (still clear feedback)
+  ctx.globalAlpha = reducedMotion.matches ? 1 : 1 - elapsed / FLASH_MS;
+  ctx.fillStyle = overlayColors.flash;
+  ctx.fillRect(...cellRect(flash.cell));
+  ctx.globalAlpha = 1;
+}
+
 function selectCell(cellIndex) {
+  flash = { cell: cellIndex, start: performance.now() };
   // suggestion bar
   if (cellIndex >= 1000) {
     const picked = suggestions[cellIndex - 1000];
-    if (!picked) return;
+    if (!picked) { flash = null; return; }
     selectionCount++;
     composedText = picked.toUpperCase() + " ";
     composedTextEl.textContent = composedText;
@@ -490,7 +536,7 @@ function selectCell(cellIndex) {
   }
 
   const label = GRID_LETTERS[cellIndex];
-  if (!label || label === "_") return;
+  if (!label || label === "_") { flash = null; return; }
   selectionCount++;
 
   if (label === "SPACE") composedText += " ";
@@ -785,6 +831,7 @@ document.getElementById("recordBtn").onclick = async () => {
     stream.getTracks().forEach((t) => t.stop());
     activeRecorder = null;
     btn.textContent = "Record Voice Clip (up to 20s)";
+    btn.classList.remove("recording");          // stops the pulsing red dot
 
     const seconds = (performance.now() - startTime) / 1000;
     if (seconds < 6) {
@@ -811,6 +858,7 @@ document.getElementById("recordBtn").onclick = async () => {
 
   recorder.start();
   btn.textContent = "Stop Recording";
+  btn.classList.add("recording");               // pulsing red dot while recording
 
   let left = RECORD_SECONDS;
   statusEl.textContent = `Recording... talk naturally (${left}s left)`;
@@ -890,6 +938,7 @@ document.getElementById("speakBtn").onclick = async () => {
   }
 
   speaking = true;
+  document.getElementById("speakBusy").hidden = false;    // animated "generating" dots
   const text = composedText;   // remember the text now, in case it changes while we wait
   try {
     if (engine !== "both") {
@@ -965,6 +1014,7 @@ document.getElementById("speakBtn").onclick = async () => {
     statusEl.textContent = "Compare done: " + report.join(", ") + ". Press play on each to listen.";
   } finally {
     speaking = false;
+    document.getElementById("speakBusy").hidden = true;
   }
 };
 
@@ -992,7 +1042,7 @@ async function openGuidedPanel() {
   guided.profileId = activeProfile.id;
   guidedEl("guidedPanel").hidden = false;
   guidedEl("guidedStatus").textContent = "Loading...";
-  guidedEl("guidedPanel").scrollIntoView({ behavior: "smooth" });
+  guidedEl("guidedPanel").scrollIntoView({ behavior: scrollMotion() });
 
   try {
     if (!guided.sentences.length) {
@@ -1307,7 +1357,7 @@ function openUploadPanel() {
   upload.audioCtx = upload.audioCtx || new AudioContext();
   uploadEl("uploadPanel").hidden = false;
   uploadEl("uploadStatus").textContent = "";
-  uploadEl("uploadPanel").scrollIntoView({ behavior: "smooth" });
+  uploadEl("uploadPanel").scrollIntoView({ behavior: scrollMotion() });
   refreshSavedUploads();
 }
 
