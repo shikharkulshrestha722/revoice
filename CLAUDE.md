@@ -82,6 +82,14 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
                                       preprocess_ref_audio_text trims + transcribes (so the
                                       transcript matches), speed 1.0, nfe_step 64, returns
                                       ref_text. Checked against f5-tts 1.1.22 source.
+                                      v7: Step 3c loads SpeechBrain metric models
+                                      (spkrec-ecapa-voxceleb, accent-id-commonaccent_ecapa);
+                                      synthesize_core returns synth_seconds + metrics
+                                      {similarity, reference/output {pitch_hz, pitch_range_hz,
+                                      words_per_sec, accent, accent_conf}, accent_match};
+                                      every metric is None on failure. speechbrain 1.1.1 is
+                                      installed --no-deps before the final pin line. Audio is
+                                      loaded with librosa at 16 kHz (no torchaudio file IO).
             archive/                  old notebooks — never run them (they broke things)
 ```
 
