@@ -2,17 +2,28 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>ReVoice</title>
+<!-- Atkinson Hyperlegible: a font designed for low-vision readers (used for the sentence
+     and the letters). If there's no internet, the system font is used instead. -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-  <h1>ReVoice</h1>
-  <p class="subtitle">Head-controlled laser input &rarr; GenAI composition &rarr; cloned voice output</p>
+  <!-- HEADER -->
+  <header class="app-header">
+    <div class="brand">
+      <h1>ReVoice</h1>
+      <p class="subtitle">Point at letters &rarr; GenAI predicts the sentence &rarr; spoken in your own voice</p>
+    </div>
+  </header>
 
   <!-- USER SWITCHER (caregiver uses the mouse here) -->
-  <div class="profile-bar">
-    <span class="profile-label">User:</span>
+  <div class="profile-bar card">
+    <span class="profile-label">User</span>
     <div id="profileButtons" class="profile-buttons"></div>
     <button id="addUserBtn">+ Add user</button>
     <button id="deleteUserBtn" class="danger" hidden>Delete user</button>
@@ -20,7 +31,7 @@
   </div>
 
   <!-- ADD USER PANEL -->
-  <div id="addUserPanel" class="panel add-user" hidden>
+  <div id="addUserPanel" class="panel card add-user" hidden>
     <h2>Add user</h2>
     <label for="newName">Name:</label>
     <input id="newName" type="text" maxlength="60" placeholder="e.g. Mr Sharma" />
@@ -47,24 +58,35 @@
       I can ask for it to be deleted at any time.</span>
     </label>
 
-    <div>
-      <button id="createUserBtn">Create user</button>
+    <div class="controls-row">
+      <button id="createUserBtn" class="primary">Create user</button>
       <button id="cancelAddBtn">Cancel</button>
     </div>
     <p id="addUserStatus" class="hint"></p>
   </div>
 
+  <!-- HERO: the sentence the patient is composing (the most important thing on screen) -->
+  <section class="hero card" aria-label="Composed sentence">
+    <div class="hero-label">Composed sentence</div>
+    <div id="composedText" class="composed-box" aria-live="polite">&nbsp;</div>
+    <div class="hero-footer">
+      <!-- how many pointer selections the predictions saved for this sentence -->
+      <p id="selectionStats" class="selection-stats"></p>
+      <button id="clearBtn">Clear</button>
+    </div>
+  </section>
+
   <div class="main-layout">
 
     <!-- LEFT: camera + letter grid -->
-    <div class="panel">
-      <h2>1. Point &amp; Select</h2>
+    <section class="panel card camera-panel">
+      <h2>Point &amp; select</h2>
       <div class="camera-wrap">
         <video id="webcam" autoplay muted playsinline></video>
         <canvas id="overlay"></canvas>
       </div>
       <div class="controls-row">
-        <button id="startCamBtn">Start Camera</button>
+        <button id="startCamBtn" class="primary">Start Camera</button>
         <label for="trackMode">Tracking:</label>
         <select id="trackMode">
           <option value="finger">Finger (index fingertip)</option>
@@ -72,43 +94,44 @@
         </select>
       </div>
       <p id="trackStatus" class="hint">Click Start Camera to begin.</p>
-      <p class="hint">Hold the pointer still on a letter until the green ring fills up.</p>
-    </div>
+      <p class="hint">Hold the pointer still on a letter until the ring fills up.</p>
+    </section>
 
-    <!-- RIGHT: composed text + voice controls -->
-    <div class="panel">
-      <h2>2. Composed Text</h2>
-      <div id="composedText" class="composed-box">&nbsp;</div>
-      <!-- how many pointer selections the predictions saved for this sentence -->
-      <p id="selectionStats" class="selection-stats"></p>
-      <button id="clearBtn">Clear</button>
-
-      <h2>3. Voice Bank</h2>
-      <label for="emotion">Emotion tag:</label>
-      <select id="emotion">
-        <option value="neutral">Neutral</option>
-        <option value="happy">Happy</option>
-        <option value="urgent">Urgent</option>
-        <option value="tender">Tender</option>
-      </select>
+    <!-- RIGHT: voice controls -->
+    <section class="panel card controls-panel">
+      <h2>Voice bank</h2>
+      <div class="controls-row">
+        <label for="emotion">Emotion:</label>
+        <select id="emotion">
+          <option value="neutral">Neutral</option>
+          <option value="happy">Happy</option>
+          <option value="urgent">Urgent</option>
+          <option value="tender">Tender</option>
+        </select>
+      </div>
       <!-- hidden for stock-voice users: they have nothing to record -->
-      <span id="recordControls">
-        <button id="recordBtn">Record Voice Clip (up to 20s)</button>
-        <span id="recordStatus"></span>
-        <br />
-        <button id="openGuidedBtn">Guided voice banking (read sentences)</button>
-        <button id="openUploadBtn">Upload old recordings</button>
-      </span>
+      <div id="recordControls">
+        <div class="controls-row">
+          <button id="recordBtn">Record Voice Clip (up to 20s)</button>
+          <span id="recordStatus"></span>
+        </div>
+        <div class="controls-row">
+          <button id="openGuidedBtn">Guided voice banking (read sentences)</button>
+          <button id="openUploadBtn">Upload old recordings</button>
+        </div>
+      </div>
       <p id="stockNote" class="hint" hidden></p>
 
-      <h2>4. Speak</h2>
-      <label for="engine">Voice engine:</label>
-      <select id="engine">
-        <option value="f5" selected>F5-TTS</option>
-        <option value="xtts">XTTS-v2</option>
-        <option value="both">Compare both</option>
-      </select>
-      <button id="speakBtn">Generate &amp; Speak</button>
+      <h2>Speak</h2>
+      <div class="controls-row">
+        <label for="engine">Voice engine:</label>
+        <select id="engine">
+          <option value="f5" selected>F5-TTS</option>
+          <option value="xtts">XTTS-v2</option>
+          <option value="both">Compare both</option>
+        </select>
+        <button id="speakBtn" class="primary speak-btn">Generate &amp; Speak</button>
+      </div>
 
       <!-- single engine: one player -->
       <audio id="outputAudio" controls></audio>
@@ -131,14 +154,14 @@
           <div id="metricsF5" class="metrics" hidden></div>
         </div>
       </div>
-      <p id="speakStatus"></p>
-    </div>
+      <p id="speakStatus" role="status"></p>
+    </section>
 
   </div>
 
   <!-- UPLOAD OLD RECORDINGS (caregiver, mouse): for someone who has already lost their voice.
        Files are decoded and trimmed IN THE BROWSER; only a clean mono WAV is uploaded. -->
-  <div id="uploadPanel" class="panel upload" hidden>
+  <div id="uploadPanel" class="panel card upload" hidden>
     <h2>Upload old recordings</h2>
     <p class="hint">
       Voice notes (WhatsApp .opus/.ogg), mp3, m4a, wav, webm or mp4 videos of the person speaking.
@@ -169,7 +192,7 @@
 
   <!-- GUIDED VOICE BANKING: read sentences one at a time.
        Each take is saved with its exact words (training data for fine-tuning). -->
-  <div id="guidedPanel" class="panel guided" hidden>
+  <div id="guidedPanel" class="panel card guided" hidden>
     <h2>Guided voice banking</h2>
     <p class="hint">
       Read each sentence in your normal voice, as if you were saying it to someone.
