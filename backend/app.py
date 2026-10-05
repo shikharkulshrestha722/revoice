@@ -16,13 +16,16 @@ from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 import requests
 import base64
+import json
 import os
 import re
+import time
 
 from predictor import get_suggestions
 from profiles import ProfileStore, ProfileError, ProfileNotFound
 from guided_sentences import GUIDED_SENTENCES, SESSION_SIZE
 from dataset_export import build_dataset_zip
+from generation_log import log_generation, summarize
 
 # ------------------------------------------------------------
 # SETTINGS come from backend/.env (copy .env.example to .env).
@@ -49,7 +52,7 @@ app = FastAPI()
 # after we edit it. API replies are left alone.
 # ------------------------------------------------------------
 API_PATHS = ("/predict", "/speak", "/upload_voice_clip", "/voice_bank",
-             "/profiles", "/stock_speakers", "/guided")
+             "/profiles", "/stock_speakers", "/guided", "/stats")
 
 
 @app.middleware("http")
@@ -119,6 +122,7 @@ async def predict(text: str = Form("")):
 # Data folder can be moved with REVOICE_DATA_DIR in .env; default is backend/data
 DATA_DIR = os.environ.get("REVOICE_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
 store = ProfileStore(DATA_DIR)
+GENERATION_LOG = os.path.join(DATA_DIR, "generation_log.csv")   # one line per /speak call
 
 # Used only if Colab is offline when the "Add user" panel asks for the list.
 # The live list comes from the Colab notebook (GET /speakers).
@@ -306,7 +310,32 @@ SUPPORTED_ENGINES = ("xtts", "f5")
 
 @app.post("/speak")
 async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("xtts"),
-                profile_id: str = Form("")):
+                profile_id: str = Form(""), selections: str = Form(""), utterance_id: str = Form("")):
+    """
+    Generates speech (see generate_speech below) and writes one line to
+    data/generation_log.csv for EVERY call, whether it worked or not.
+    selections / utterance_id come from the page's selection counter.
+    """
+    info = {}            # generate_speech fills in voice_source and seconds
+    try:
+        result = generate_speech(text, emotion, engine, profile_id, info)
+        error = json.loads(result.body)["error"] if isinstance(result, JSONResponse) else ""
+    except Exception as e:                # e.g. no user selected; logged, then shown as usual
+        result, error = e, str(e)
+
+    log_generation(
+        GENERATION_LOG, text=text, engine=engine, emotion=emotion,
+        voice_source=info.get("voice_source", ""), seconds=info.get("seconds"),
+        success=not error, error=error,
+        selections=int(selections) if selections.strip().isdigit() else None,
+        utterance_id=utterance_id[:40],
+    )
+    if isinstance(result, Exception):
+        raise result
+    return result
+
+
+def generate_speech(text, emotion, engine, profile_id, info):
     """
     Takes the composed sentence + chosen emotion, finds the user's
     voice (their recordings, or a stock voice), and asks the Colab API
@@ -335,13 +364,16 @@ async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = F
                 status_code=400,
             )
         payload["stock_speaker"] = profile["stock_speaker"]
+        info["voice_source"] = "stock"
         print(f"[speak:{engine}] {text!r} -> {spoken_text!r} with stock voice {profile['stock_speaker']!r}")
     else:
         raw_clips = store.get_clips(profile["id"], emotion)
+        info["voice_source"] = "emotion_clips"
         if not raw_clips:
             # no clip for this emotion: fall back to the guided recordings chosen as
             # references (the emotion still changes speed/expressiveness on Colab)
             raw_clips = store.get_reference_clips(profile["id"])
+            info["voice_source"] = "guided_references"
         if not raw_clips:
             return JSONResponse(
                 {"error": f"No voice sample recorded yet for emotion '{emotion}'. "
@@ -353,6 +385,7 @@ async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = F
         payload["speaker_wav_base64_list"] = clips        # all clips = better cloning
         print(f"[speak:{engine}] {text!r} -> {spoken_text!r} using {len(clips)} clip(s) of {profile['id']}")
 
+    start = time.perf_counter()
     try:
         response = requests.post(
             f"{COLAB_API_URL.rstrip('/')}/synthesize",
@@ -361,7 +394,10 @@ async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = F
             timeout=120,  # first generation on Colab can take 20-30 seconds
         )
     except requests.exceptions.RequestException as e:
+        info["seconds"] = time.perf_counter() - start
         return JSONResponse({"error": f"Could not reach Colab API: {e}"}, status_code=502)
+
+    info["seconds"] = time.perf_counter() - start    # generation time, including the network
 
     # If Colab returned an error, show WHAT went wrong instead of just the status code
     if response.status_code != 200:
@@ -376,6 +412,12 @@ async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = F
         )
 
     return response.json()  # forwards {"audio_base64": "..."} straight to the browser
+
+
+@app.get("/stats/summary")
+async def stats_summary():
+    """Average generation time per engine and selections saved (from the log)."""
+    return summarize(GENERATION_LOG)
 
 
 # ------------------------------------------------------------

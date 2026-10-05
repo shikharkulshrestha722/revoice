@@ -28,4 +28,6 @@ def store(monkeypatch, tmp_path):
     recordings in backend/data are never touched."""
     fresh = ProfileStore(tmp_path / "data")
     monkeypatch.setattr(backend, "store", fresh)
+    # the generation log goes in the temporary folder too
+    monkeypatch.setattr(backend, "GENERATION_LOG", str(tmp_path / "data" / "generation_log.csv"))
     return fresh
