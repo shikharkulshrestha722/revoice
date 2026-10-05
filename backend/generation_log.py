@@ -18,6 +18,13 @@
 #                         / letter_by_letter x 100
 #   seconds               time for Colab to generate the audio (includes network)
 #   success, error        did it work, and if not, why
+#   synth_seconds         speech generation alone, measured on Colab (no network, no metrics)
+#   similarity            how similar the output voice is to the person's real voice
+#                         (speaker-embedding cosine similarity, 1 = identical)
+#   ref_/out_accent       estimated English accent of the real voice / of the output
+#   accent_match          yes if both got the same accent label
+#   ref_/out_pitch_hz     average pitch of the real voice / of the output
+#   ref_/out_words_per_sec  speaking rate of the real voice / of the output
 # ============================================================
 
 import csv
@@ -28,7 +35,10 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 FIELDS = ["timestamp", "utterance_id", "engine", "emotion", "voice_source", "chars", "words",
-          "selections", "letter_by_letter", "selections_saved_pct", "seconds", "success", "error"]
+          "selections", "letter_by_letter", "selections_saved_pct", "seconds", "success", "error",
+          # voice evaluation (added later, so they come last)
+          "synth_seconds", "similarity", "ref_accent", "out_accent", "accent_match",
+          "ref_pitch_hz", "out_pitch_hz", "ref_words_per_sec", "out_words_per_sec"]
 
 _lock = threading.Lock()   # two requests at once must not mix up their lines
 
@@ -49,8 +59,45 @@ def saved_percent(selections: int, letter_by_letter: int):
     return round(100 * (letter_by_letter - selections) / letter_by_letter, 1)
 
 
+def _blank(value):
+    return "" if value is None else value
+
+
+def metric_columns(metrics) -> dict:
+    """Turns the metrics from Colab (nested, any part may be null) into flat CSV columns."""
+    m = metrics or {}
+    ref = m.get("reference") or {}
+    out = m.get("output") or {}
+    match = m.get("accent_match")
+    return {
+        "similarity": _blank(m.get("similarity")),
+        "ref_accent": ref.get("accent") or "",
+        "out_accent": out.get("accent") or "",
+        "accent_match": "" if match is None else ("yes" if match else "no"),
+        "ref_pitch_hz": _blank(ref.get("pitch_hz")),
+        "out_pitch_hz": _blank(out.get("pitch_hz")),
+        "ref_words_per_sec": _blank(ref.get("words_per_sec")),
+        "out_words_per_sec": _blank(out.get("words_per_sec")),
+    }
+
+
+def _upgrade_old_file(path):
+    """An older log may have fewer columns. Rewrite it with the current header
+    (old rows keep their values, new columns stay empty) so the CSV stays valid."""
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames == FIELDS:
+            return
+        rows = list(reader)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=FIELDS, restval="", extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def log_generation(path, *, text, engine, emotion, voice_source="", seconds=None,
-                   success=False, error="", selections=None, utterance_id=""):
+                   success=False, error="", selections=None, utterance_id="",
+                   synth_seconds=None, metrics=None):
     """Appends one row to the CSV (creating it, with a header line, if needed)."""
     clean = tidy(text)
     needed = letter_by_letter_selections(clean)
@@ -68,10 +115,14 @@ def log_generation(path, *, text, engine, emotion, voice_source="", seconds=None
         "seconds": "" if seconds is None else round(seconds, 2),
         "success": "yes" if success else "no",
         "error": (error or "").replace("\n", " ")[:300],
+        "synth_seconds": _blank(synth_seconds),
+        **metric_columns(metrics),
     }
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with _lock:
         new_file = not os.path.exists(path) or os.path.getsize(path) == 0
+        if not new_file:
+            _upgrade_old_file(path)
         with open(path, "a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=FIELDS)
             if new_file:
@@ -106,6 +157,9 @@ def summarize(path) -> dict:
     for engine, items in sorted(by_engine.items()):
         ok = [r for r in items if r["success"] == "yes"]
         times = [t for t in (_number(r["seconds"]) for r in ok) if t is not None]
+        synth = [t for t in (_number(r.get("synth_seconds")) for r in ok) if t is not None]
+        sims = [s for s in (_number(r.get("similarity")) for r in ok) if s is not None]
+        matches = [r.get("accent_match") for r in ok if r.get("accent_match") in ("yes", "no")]
         engines[engine] = {
             "requests": len(items),
             "succeeded": len(ok),
@@ -115,6 +169,11 @@ def summarize(path) -> dict:
             "median_seconds": round(statistics.median(times), 2) if times else None,
             "min_seconds": round(min(times), 2) if times else None,
             "max_seconds": round(max(times), 2) if times else None,
+            "avg_synth_seconds": round(statistics.mean(synth), 2) if synth else None,
+            "avg_similarity": round(statistics.mean(sims), 3) if sims else None,
+            "similarity_measured": len(sims),
+            "accent_match_rate_pct": round(100 * matches.count("yes") / len(matches), 1) if matches else None,
+            "accent_measured": len(matches),
         }
 
     # ---- selections saved, counted once per sentence (the latest row wins) ----

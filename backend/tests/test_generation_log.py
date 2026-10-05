@@ -173,3 +173,87 @@ def test_stats_endpoint(user, monkeypatch):
     s = client.get("/stats/summary").json()
     assert s["engines"]["xtts"]["succeeded"] == 1
     assert s["selections"]["sentences"] == 1
+
+
+# ================= voice evaluation metrics (mocked Colab replies) =================
+
+METRICS = {
+    "similarity": 0.734,
+    "reference": {"pitch_hz": 121.5, "pitch_range_hz": 40.2, "words_per_sec": 2.6,
+                  "accent": "england", "accent_conf": 0.81},
+    "output": {"pitch_hz": 118.0, "pitch_range_hz": 31.0, "words_per_sec": 2.9,
+               "accent": "us", "accent_conf": 0.55},
+    "accent_match": False,
+}
+
+
+def test_metrics_from_colab_are_logged_and_passed_to_the_page(user, monkeypatch):
+    reply = {"audio_base64": "x", "synth_seconds": 3.21, "metrics": METRICS, "metrics_seconds": 1.1}
+    monkeypatch.setattr(backend.requests, "post", lambda *a, **kw: FakeResponse(200, reply))
+    r = speak()
+    assert r.json() == reply                       # the page gets the metrics unchanged
+    row = log_rows()[0]
+    assert row["synth_seconds"] == "3.21"
+    assert row["similarity"] == "0.734"
+    assert (row["ref_accent"], row["out_accent"], row["accent_match"]) == ("england", "us", "no")
+    assert (row["ref_pitch_hz"], row["out_pitch_hz"]) == ("121.5", "118.0")
+    assert (row["ref_words_per_sec"], row["out_words_per_sec"]) == ("2.6", "2.9")
+
+
+def test_missing_or_null_metrics_leave_columns_empty(user, monkeypatch):
+    nulls = {"similarity": None, "reference": None, "accent_match": None,
+             "output": {"pitch_hz": None, "pitch_range_hz": None, "words_per_sec": None,
+                        "accent": None, "accent_conf": None}}
+    replies = iter([{"audio_base64": "x", "metrics": nulls}, {"audio_base64": "x"}])   # 2nd: older Colab
+    monkeypatch.setattr(backend.requests, "post", lambda *a, **kw: FakeResponse(200, next(replies)))
+    speak(); speak()
+    for row in log_rows():
+        assert row["success"] == "yes"
+        assert all(row[c] == "" for c in ["synth_seconds", "similarity", "ref_accent", "out_accent",
+                                          "accent_match", "ref_pitch_hz", "out_pitch_hz"])
+
+
+def test_old_log_file_is_upgraded_to_the_new_columns(tmp_path):
+    path = tmp_path / "log.csv"
+    old_fields = FIELDS[:13]                       # the columns before metrics existed
+    path.write_text(",".join(old_fields) + "\n" +
+                    "2026-10-05T10:00:00+00:00,u1,xtts,neutral,stock,5,1,5,5,0.0,4.0,yes,\n",
+                    encoding="utf-8")
+    log_generation(str(path), text="HI", engine="f5", emotion="neutral", seconds=9.0, success=True,
+                   synth_seconds=7.5, metrics=METRICS)
+    with open(path, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert list(rows[0].keys()) == FIELDS
+    assert rows[0]["engine"] == "xtts" and rows[0]["seconds"] == "4.0" and rows[0]["similarity"] == ""
+    assert rows[1]["engine"] == "f5" and rows[1]["similarity"] == "0.734"
+
+
+def test_summary_similarity_and_accent_match_per_engine(tmp_path):
+    path = str(tmp_path / "log.csv")
+    def add(engine, sim, match, ok=True, synth=None):
+        m = {"similarity": sim, "accent_match": match, "reference": None, "output": None}
+        log_generation(path, text="HI", engine=engine, emotion="neutral", seconds=5.0,
+                       success=ok, synth_seconds=synth, metrics=m)
+    add("xtts", 0.70, True, synth=3.0)
+    add("xtts", 0.60, False, synth=4.0)
+    add("xtts", None, None)                 # metric missing: not counted
+    add("xtts", 0.10, False, ok=False)      # failed request: not counted
+    add("f5", 0.80, True)
+    s = summarize(path)["engines"]
+    assert s["xtts"]["avg_similarity"] == 0.65 and s["xtts"]["similarity_measured"] == 2
+    assert s["xtts"]["accent_match_rate_pct"] == 50.0 and s["xtts"]["accent_measured"] == 2
+    assert s["xtts"]["avg_synth_seconds"] == 3.5
+    assert s["f5"]["avg_similarity"] == 0.8 and s["f5"]["accent_match_rate_pct"] == 100.0
+    assert s["f5"]["avg_synth_seconds"] is None
+
+
+def test_report_prints_voice_quality_table(tmp_path, capsys, monkeypatch):
+    import report
+    path = str(tmp_path / "log.csv")
+    log_generation(path, text="HI", engine="xtts", emotion="neutral", seconds=5.0, success=True,
+                   synth_seconds=3.0, metrics=METRICS)
+    monkeypatch.setattr("sys.argv", ["report.py", path])
+    report.main()
+    out = capsys.readouterr().out
+    assert "Voice quality per engine" in out
+    assert "0.734" in out and "0.0%" in out          # similarity and accent match (england vs us)

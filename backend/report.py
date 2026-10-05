@@ -42,6 +42,16 @@ def main():
               f"{show(e['success_rate_pct'], '%'):>9}{show(e['avg_seconds']):>9}{show(e['median_seconds']):>8}"
               f"{show(e['min_seconds']):>7}{show(e['max_seconds']):>7}")
 
+    print("\nVoice quality per engine (successful requests with metrics)")
+    print("  similarity = speaker-embedding cosine similarity to the real voice (1 = identical)")
+    print("  accent match = output got the same estimated accent label as the real voice")
+    header = f"{'Engine':<10}{'Similarity':>11}{'(n)':>5}{'Accent match':>14}{'(n)':>5}{'Synthesis only (s)':>20}"
+    print(header)
+    print("-" * len(header))
+    for engine, e in s["engines"].items():
+        print(f"{ENGINE_NAMES.get(engine, engine):<10}{show(e['avg_similarity']):>11}{e['similarity_measured']:>5}"
+              f"{show(e['accent_match_rate_pct'], '%'):>14}{e['accent_measured']:>5}{show(e['avg_synth_seconds']):>20}")
+
     sel = s["selections"]
     print("\nSelections saved by prediction (each sentence counted once)")
     print(f"  Sentences measured:                  {sel['sentences']}")

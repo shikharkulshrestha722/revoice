@@ -333,6 +333,7 @@ async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = F
         error = json.loads(result.body)["error"] if isinstance(result, JSONResponse) else ""
     except Exception as e:                # e.g. no user selected; logged, then shown as usual
         result, error = e, str(e)
+    reply = result if isinstance(result, dict) else {}   # Colab's reply when it worked
 
     log_generation(
         GENERATION_LOG, text=text, engine=engine, emotion=emotion,
@@ -340,6 +341,7 @@ async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = F
         success=not error, error=error,
         selections=int(selections) if selections.strip().isdigit() else None,
         utterance_id=utterance_id[:40],
+        synth_seconds=reply.get("synth_seconds"), metrics=reply.get("metrics"),
     )
     if isinstance(result, Exception):
         raise result
