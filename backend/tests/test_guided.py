@@ -32,11 +32,10 @@ def record(sentence_id, data=b"audio", duration=3.0, profile_id=""):
 
 # ================= the sentence list =================
 
-def test_there_are_150_sentences_with_unique_ordered_ids():
+def test_there_are_350_sentences_with_unique_ordered_ids():
     ids = [sid for sid, _ in GUIDED_SENTENCES]
-    assert len(ids) == 150
-    assert len(set(ids)) == 150
-    assert ids == [f"g{i:03d}" for i in range(1, 151)]
+    assert ids == [f"g{i:03d}" for i in range(1, 351)]
+    assert len(set(text for _, text in GUIDED_SENTENCES)) == 350     # no repeated sentence
 
 
 def test_sentences_are_safe_for_the_dataset_file():
@@ -45,7 +44,30 @@ def test_sentences_are_safe_for_the_dataset_file():
         assert not re.search(r"\d", text), sid          # numbers must be spelled out
         assert text == text.strip() and "  " not in text, sid
         assert text[-1] in ".?!", sid
-        assert 1 <= len(text.split()) <= 12, sid         # short enough to read in one breath
+        assert '"' not in text, sid
+
+
+def test_short_and_long_sentence_lengths():
+    for sid, text in GUIDED_SENTENCES:
+        words = len(text.split())
+        if int(sid[1:]) <= 150:
+            assert 1 <= words <= 12, sid     # short patient phrases
+        else:
+            assert 12 <= words <= 20, sid    # longer sentences: more audio per take
+
+
+def test_long_sentences_have_no_names_or_abbreviations():
+    # the only capital letters allowed after the first word are "I", "I'm", "I'd"...
+    for sid, text in GUIDED_SENTENCES[150:]:
+        later_words = re.findall(r"[A-Za-z']+", text)[1:]
+        capitals = [w for w in later_words
+                    if w[0].isupper() and not re.fullmatch(r"I('m|'d|'ll|'ve)?", w)]
+        assert capitals == [], (sid, capitals)
+
+
+def test_long_sentences_mix_statements_questions_and_exclamations():
+    endings = [text[-1] for _, text in GUIDED_SENTENCES[150:]]
+    assert endings.count("?") >= 30 and endings.count("!") >= 10
 
 
 # ================= storage =================
@@ -71,7 +93,7 @@ def test_progress_and_total_time(store, user):
     store.save_guided(user["id"], "g001", b"a", ".webm", 60.0)
     status = store.save_guided(user["id"], "g003", b"b", ".webm", 30.0)
     assert status["count"] == 2
-    assert status["total_sentences"] == 150
+    assert status["total_sentences"] == 350
     assert status["total_seconds"] == 90.0
     assert status["next_id"] == "g002"          # resume at the first gap
 
@@ -182,7 +204,8 @@ class FakeOk:
 def test_sentences_endpoint():
     data = client.get("/guided/sentences").json()["sentences"]
     assert data[0] == {"id": "g001", "text": SENTENCE_BY_ID["g001"]}
-    assert len(data) == 150
+    assert len(data) == 350
+    assert client.get("/guided/sentences").json()["session_size"] == 50
 
 
 def test_record_status_skip_and_playback_endpoints(user):

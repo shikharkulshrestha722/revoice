@@ -791,9 +791,10 @@ document.getElementById("speakBtn").onclick = async () => {
 // sentence id, so the server stores it next to its EXACT words.
 // Set up by the person banking their voice (or a caregiver), so mouse +
 // keyboard is fine here.
-const GUIDED_MAX_SECONDS = 15;   // sentences are short; stop automatically after this
+const GUIDED_MAX_SECONDS = 30;   // stop automatically after this (long sentences, slow speech)
 const guided = {
   sentences: [],        // [{id, text}] from the server
+  sessionSize: 50,      // sentences per sitting (from the server)
   status: null,         // progress from the server
   index: 0,             // which sentence is on screen
   stream: null,         // microphone, kept open while the panel is open (no delay before each take)
@@ -812,7 +813,9 @@ async function openGuidedPanel() {
 
   try {
     if (!guided.sentences.length) {
-      guided.sentences = (await (await fetch("/guided/sentences")).json()).sentences;
+      const data = await (await fetch("/guided/sentences")).json();
+      guided.sentences = data.sentences;
+      guided.sessionSize = data.session_size || 50;
     }
     await refreshGuidedStatus();
     // resume where they left off: the first sentence not yet recorded
@@ -858,6 +861,7 @@ function showGuidedProgress() {
     `${st.count} / ${st.total_sentences} recorded · ${minutes.toFixed(1)} minutes of speech` +
     (st.skipped.length ? ` · ${st.skipped.length} skipped` : "") +
     " (fine-tuning needs 15-30 minutes; voice references need about half a minute)";
+  renderGuidedSessions();
   guidedEl("guidedExportBtn").disabled = st.count === 0;
   guidedEl("guidedRefsBtn").disabled = st.count === 0;
 
@@ -867,6 +871,46 @@ function showGuidedProgress() {
       "for any emotion that has no clip of its own."
     : "Tip: after 8-10 sentences, use them as voice references so speech works without separate clips.";
 }
+
+// ----- sessions: the list is split into blocks of ~50 so it can be done over several sittings -----
+const sessionOf = (index) => Math.floor(index / guided.sessionSize);
+const sessionCount = () => Math.ceil(guided.sentences.length / guided.sessionSize);
+const sessionRange = (n) => [n * guided.sessionSize,
+                             Math.min(guided.sentences.length, (n + 1) * guided.sessionSize)];
+
+function sessionProgress(n) {
+  const [from, to] = sessionRange(n);
+  let done = 0;
+  for (let i = from; i < to; i++) if (guided.status?.recorded[guided.sentences[i].id]) done++;
+  return { done, total: to - from };
+}
+
+function renderGuidedSessions() {
+  const select = guidedEl("guidedSession");
+  if (!guided.sentences.length) return;
+  select.innerHTML = "";
+  for (let n = 0; n < sessionCount(); n++) {
+    const [from, to] = sessionRange(n);
+    const { done, total } = sessionProgress(n);
+    const tick = done === total ? " ✓" : "";
+    select.add(new Option(`${n + 1} (sentences ${from + 1}-${to}) ${done}/${total}${tick}`, n));
+  }
+  const current = sessionOf(guided.index);
+  select.value = current;
+  const { done, total } = sessionProgress(current);
+  guidedEl("guidedSessionInfo").textContent =
+    `Session ${current + 1} of ${sessionCount()}: ${done} of ${total} done`;
+}
+
+// picking a session jumps to its first unrecorded sentence
+guidedEl("guidedSession").onchange = (e) => {
+  const [from, to] = sessionRange(Number(e.target.value));
+  let target = from;
+  for (let i = from; i < to; i++) {
+    if (!guided.status.recorded[guided.sentences[i].id]) { target = i; break; }
+  }
+  goToGuided(target);
+};
 
 function showGuidedSentence() {
   const s = guided.sentences[guided.index];
@@ -881,6 +925,7 @@ function showGuidedSentence() {
   guidedEl("guidedPlayBtn").disabled = !done;
   guidedEl("guidedPrevBtn").disabled = guided.index === 0;
   guided.lastTakeUrl = null;
+  renderGuidedSessions();
 }
 
 function goToGuided(index) {
@@ -891,15 +936,28 @@ function goToGuided(index) {
   showGuidedSentence();
 }
 
-// after a good take: jump to the next sentence still to do (or just the next one)
+// after a good take: go to the next sentence still to do IN THIS SESSION;
+// when the session is finished, suggest a break and move on
 function goToNextGuided() {
-  const nextId = guided.status.next_id;
-  const i = guided.sentences.findIndex((s) => s.id === nextId);
-  if (nextId === null) {
+  const st = guided.status;
+  const current = sessionOf(guided.index);
+  const [, end] = sessionRange(current);
+  for (let i = guided.index + 1; i < end; i++) {
+    const id = guided.sentences[i].id;
+    if (!st.recorded[id] && !st.skipped.includes(id)) return goToGuided(i);
+  }
+
+  if (st.next_id === null) {
     guidedEl("guidedStatus").textContent = "All sentences recorded. Thank you! You can download the dataset now.";
+    renderGuidedSessions();
     return;
   }
-  goToGuided(i > guided.index ? i : guided.index + 1);
+  const { done, total } = sessionProgress(current);
+  const next = guided.sentences.findIndex((s) => s.id === st.next_id);
+  goToGuided(next);
+  guidedEl("guidedStatus").textContent = done === total
+    ? `Session ${current + 1} finished! A good moment for a break. Carry on whenever you're ready.`
+    : `End of session ${current + 1} (${total - done} skipped). Continuing with the next sentence to do.`;
 }
 
 // Decodes the take and checks its loudness (see audio_checks.js)

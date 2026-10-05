@@ -21,7 +21,7 @@ import re
 
 from predictor import get_suggestions
 from profiles import ProfileStore, ProfileError, ProfileNotFound
-from guided_sentences import GUIDED_SENTENCES
+from guided_sentences import GUIDED_SENTENCES, SESSION_SIZE
 from dataset_export import build_dataset_zip
 
 # ------------------------------------------------------------
@@ -238,7 +238,8 @@ async def voice_bank_status(profile_id: str = ""):
 # ------------------------------------------------------------
 @app.get("/guided/sentences")
 async def guided_sentences():
-    return {"sentences": [{"id": sid, "text": text} for sid, text in GUIDED_SENTENCES]}
+    return {"sentences": [{"id": sid, "text": text} for sid, text in GUIDED_SENTENCES],
+            "session_size": SESSION_SIZE}
 
 
 @app.get("/guided/status")
