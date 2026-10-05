@@ -489,9 +489,12 @@ function applyProfileToVoiceControls() {
       "No recording needed. The emotion still changes the speaking style.";
   }
 
+  // F5-TTS is the default engine; stock voices only work with XTTS
   const engineEl = document.getElementById("engine");
   for (const opt of engineEl.options) opt.disabled = isStock && opt.value !== "xtts";
   if (isStock) engineEl.value = "xtts";
+  else if (engineEl.dataset.forcedForStock) engineEl.value = "f5";   // back to the default
+  engineEl.dataset.forcedForStock = isStock ? "yes" : "";
 
   updateVoiceBankStatus();
 }

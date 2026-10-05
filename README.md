@@ -89,7 +89,7 @@ node --test "frontend/tests/*.test.mjs"
    - *Download dataset (.zip)*: an LJSpeech-style training set (metadata.csv + audio) for
      fine-tuning XTTS on this voice. Without ffmpeg installed, the zip holds the original
      .webm clips and the Colab fine-tuning notebook converts them.
-6. Pick a voice engine — **XTTS-v2**, **F5-TTS**, or **Compare both** (generates with
+6. Pick a voice engine — **F5-TTS** (default), **XTTS-v2**, or **Compare both** (generates with
    each, one after the other, and shows how long each took) — then **Generate & Speak**.
 
 ## Evidence for the report
