@@ -538,10 +538,17 @@ function drawSelectionFlash(now) {
   if (!flash) return;
   const elapsed = now - flash.start;
   if (elapsed > FLASH_MS) { flash = null; return; }
-  // fades out normally; with reduced motion it's a steady highlight (still clear feedback)
+  // fades out normally; with reduced motion it's a steady highlight (still clear feedback).
+  // A light tint + a bold outline: obvious, but the label underneath stays readable.
+  const [x, y, w, h] = cellRect(flash.cell);
   ctx.globalAlpha = reducedMotion.matches ? 1 : 1 - elapsed / FLASH_MS;
   ctx.fillStyle = overlayColors.flash;
-  ctx.fillRect(...cellRect(flash.cell));
+  ctx.globalAlpha *= 0.5;
+  ctx.fillRect(x, y, w, h);
+  ctx.globalAlpha *= 2;
+  ctx.strokeStyle = overlayColors.pointer;
+  ctx.lineWidth = 5;
+  ctx.strokeRect(x + 3, y + 3, w - 6, h - 6);
   ctx.globalAlpha = 1;
 }
 
