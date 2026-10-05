@@ -116,6 +116,27 @@ select {
   width: 100%;
 }
 
+.metrics {
+  font-size: 12px;
+  color: #333;
+  background: #f6f8fa;
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin-top: 4px;
+}
+
+.compare-item.winner {
+  border: 2px solid #0a7a4f;
+  background: #f1faf5;
+}
+
+.winner-badge {
+  color: #0a7a4f;
+  font-weight: bold;
+  font-size: 12px;
+  margin-left: 6px;
+}
+
 .ref-text {
   font-size: 12px;
   font-style: italic;

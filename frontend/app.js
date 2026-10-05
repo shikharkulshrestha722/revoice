@@ -10,6 +10,7 @@
 import { PointerTracker, DwellSelector, detectLaserBlob } from "./tracking.js";
 import { analyzeLevels, PROBLEM_MESSAGES } from "./audio_checks.js";
 import { selectionSavings } from "./selection_stats.js";
+import { metricsLines, moreSimilarEngine } from "./metrics_format.js";
 
 // MediaPipe is loaded later, only when Finger mode needs it.
 // That way, if it fails to download, the camera still works.
@@ -742,8 +743,20 @@ function showRefText(el, refText) {
   el.textContent = refText ? `F5 heard the reference recording as: "${refText}"` : "";
 }
 
+// Voice metrics measured on Colab (similarity, pitch, rate, accent), one line each.
+// Shows nothing if there are none (e.g. metrics switched off on Colab).
+function showMetrics(el, metrics) {
+  const lines = metricsLines(metrics);
+  el.replaceChildren(...lines.map((line) => {
+    const div = document.createElement("div");
+    div.textContent = line;
+    return div;
+  }));
+  el.hidden = lines.length === 0;
+}
+
 // Asks the backend for speech from ONE engine.
-// Returns { audioSrc, seconds, refText } or throws an Error with a readable message.
+// Returns { audioSrc, seconds, refText, metrics } or throws an Error with a readable message.
 async function requestSpeech(engine, text, emotion) {
   const formData = new FormData();
   formData.append("text", text);
@@ -761,7 +774,8 @@ async function requestSpeech(engine, text, emotion) {
   try { data = await res.json(); } catch { data = {}; }
   if (!res.ok) throw new Error(data.error || `server returned ${res.status}`);
 
-  return { audioSrc: "data:audio/wav;base64," + data.audio_base64, seconds, refText: data.ref_text || "" };
+  return { audioSrc: "data:audio/wav;base64," + data.audio_base64, seconds,
+           refText: data.ref_text || "", metrics: data.metrics || null };
 }
 
 document.getElementById("speakBtn").onclick = async () => {
@@ -785,14 +799,17 @@ document.getElementById("speakBtn").onclick = async () => {
       compareBox.hidden = true;
       singleAudio.hidden = false;
       const refTextEl = document.getElementById("refTextSingle");
+      const metricsEl = document.getElementById("metricsSingle");
       clearPlayer(singleAudio);
       showRefText(refTextEl, "");
+      showMetrics(metricsEl, null);
       statusEl.textContent = `Generating speech with ${ENGINE_NAMES[engine]}...`;
       try {
-        const { audioSrc, seconds, refText } = await requestSpeech(engine, text, emotion);
+        const { audioSrc, seconds, refText, metrics } = await requestSpeech(engine, text, emotion);
         singleAudio.src = audioSrc;
         singleAudio.play();
         showRefText(refTextEl, refText);
+        showMetrics(metricsEl, metrics);
         statusEl.textContent = `Done in ${seconds.toFixed(1)}s (${ENGINE_NAMES[engine]}).`;
       } catch (err) {
         statusEl.textContent = "Error: " + err.message;
@@ -806,14 +823,20 @@ document.getElementById("speakBtn").onclick = async () => {
     clearPlayer(singleAudio);
     singleAudio.hidden = true;
     compareBox.hidden = false;
-    const players = {
-      xtts: { audio: document.getElementById("audioXtts"), time: document.getElementById("timeXtts") },
-      f5:   { audio: document.getElementById("audioF5"),   time: document.getElementById("timeF5") },
-    };
+    const player = (id) => ({
+      audio: document.getElementById("audio" + id), time: document.getElementById("time" + id),
+      metrics: document.getElementById("metrics" + id), item: document.getElementById("item" + id),
+      badge: document.getElementById("badge" + id),
+    });
+    const players = { xtts: player("Xtts"), f5: player("F5") };
     for (const p of Object.values(players)) {
       clearPlayer(p.audio);
+      showMetrics(p.metrics, null);
+      p.item.classList.remove("winner");
+      p.badge.hidden = true;
       p.time.textContent = "waiting...";
     }
+    const metricsByEngine = {};
     const refTextF5 = document.getElementById("refTextF5");
     showRefText(refTextF5, "");
 
@@ -822,16 +845,24 @@ document.getElementById("speakBtn").onclick = async () => {
       statusEl.textContent = `Generating with ${ENGINE_NAMES[eng]}...`;
       players[eng].time.textContent = "generating...";
       try {
-        const { audioSrc, seconds, refText } = await requestSpeech(eng, text, emotion);
+        const { audioSrc, seconds, refText, metrics } = await requestSpeech(eng, text, emotion);
         players[eng].audio.src = audioSrc;
         players[eng].time.textContent = `took ${seconds.toFixed(1)}s`;
         if (eng === "f5") showRefText(refTextF5, refText);
+        showMetrics(players[eng].metrics, metrics);
+        metricsByEngine[eng] = metrics;
         report.push(`${ENGINE_NAMES[eng]} ${seconds.toFixed(1)}s`);
       } catch (err) {
         // one engine failing shouldn't stop the other from being tried
         players[eng].time.textContent = "failed: " + err.message;
         report.push(`${ENGINE_NAMES[eng]} failed`);
       }
+    }
+    // highlight the engine whose voice was measured as closer to the real person
+    const winner = moreSimilarEngine(metricsByEngine);
+    if (winner) {
+      players[winner].item.classList.add("winner");
+      players[winner].badge.hidden = false;
     }
     statusEl.textContent = "Compare done: " + report.join(", ") + ". Press play on each to listen.";
   } finally {

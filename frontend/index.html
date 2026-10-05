@@ -110,17 +110,22 @@
       <!-- single engine: one player -->
       <audio id="outputAudio" controls></audio>
       <p id="refTextSingle" class="ref-text" hidden></p>
+      <div id="metricsSingle" class="metrics" hidden></div>
 
       <!-- "Compare both": one labelled player per engine -->
       <div id="compareBox" class="compare-box" hidden>
-        <div class="compare-item">
+        <div id="itemXtts" class="compare-item">
           <strong>XTTS-v2</strong> <span id="timeXtts" class="compare-time"></span>
+          <span id="badgeXtts" class="winner-badge" hidden>&#9733; more similar voice</span>
           <audio id="audioXtts" controls></audio>
+          <div id="metricsXtts" class="metrics" hidden></div>
         </div>
-        <div class="compare-item">
+        <div id="itemF5" class="compare-item">
           <strong>F5-TTS</strong> <span id="timeF5" class="compare-time"></span>
+          <span id="badgeF5" class="winner-badge" hidden>&#9733; more similar voice</span>
           <audio id="audioF5" controls></audio>
           <p id="refTextF5" class="ref-text" hidden></p>
+          <div id="metricsF5" class="metrics" hidden></div>
         </div>
       </div>
       <p id="speakStatus"></p>
