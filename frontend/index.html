@@ -29,6 +29,8 @@
       <legend>Voice</legend>
       <label><input type="radio" name="voiceType" value="cloned" checked />
         Record my voice (clone it)</label>
+      <label><input type="radio" name="voiceType" value="upload" />
+        Use old recordings (voice notes, videos) of someone who can no longer record</label>
       <label><input type="radio" name="voiceType" value="stock" />
         Use a stock voice (for someone with no healthy voice left to record)</label>
     </fieldset>
@@ -41,8 +43,8 @@
 
     <label id="consentRow" class="consent">
       <input type="checkbox" id="consent" />
-      I agree that my voice may be recorded and cloned for ReVoice.
-      I can ask for it to be deleted at any time.
+      <span id="consentText">I agree that my voice may be recorded and cloned for ReVoice.
+      I can ask for it to be deleted at any time.</span>
     </label>
 
     <div>
@@ -95,6 +97,7 @@
         <span id="recordStatus"></span>
         <br />
         <button id="openGuidedBtn">Guided voice banking (read sentences)</button>
+        <button id="openUploadBtn">Upload old recordings</button>
       </span>
       <p id="stockNote" class="hint" hidden></p>
 
@@ -131,6 +134,37 @@
       <p id="speakStatus"></p>
     </div>
 
+  </div>
+
+  <!-- UPLOAD OLD RECORDINGS (caregiver, mouse): for someone who has already lost their voice.
+       Files are decoded and trimmed IN THE BROWSER; only a clean mono WAV is uploaded. -->
+  <div id="uploadPanel" class="panel upload" hidden>
+    <h2>Upload old recordings</h2>
+    <p class="hint">
+      Voice notes (WhatsApp .opus/.ogg), mp3, m4a, wav, webm or mp4 videos of the person speaking.
+      For each file, drag the <b>green handles</b> on the waveform so only <b>their</b> voice is
+      kept (cut out other people and music), then press &#9654; to check.
+    </p>
+    <input type="file" id="uploadFiles" multiple
+           accept=".mp3,.m4a,.wav,.ogg,.opus,.webm,.mp4,audio/*,video/mp4" />
+    <div id="uploadList"></div>
+
+    <label class="consent">
+      <input type="checkbox" id="uploadConsent" />
+      I am this person or their family/legal guardian and have the right to use these recordings.
+    </label>
+    <label for="uploadConsentName">Your name (who is giving consent):</label>
+    <input type="text" id="uploadConsentName" maxlength="80" placeholder="e.g. Ravi Sharma (son)" />
+
+    <div class="controls-row">
+      <button id="uploadSaveBtn" class="primary">Save trimmed clips</button>
+      <button id="uploadCloseBtn">Close</button>
+    </div>
+    <p id="uploadStatus" class="hint"></p>
+
+    <h3>Saved recordings</h3>
+    <div id="uploadSaved"></div>
+    <p id="uploadTotal" class="guided-counts"></p>
   </div>
 
   <!-- GUIDED VOICE BANKING: read sentences one at a time.

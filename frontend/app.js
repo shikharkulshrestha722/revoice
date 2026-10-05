@@ -11,6 +11,8 @@ import { PointerTracker, DwellSelector, detectLaserBlob } from "./tracking.js";
 import { analyzeLevels, PROBLEM_MESSAGES } from "./audio_checks.js";
 import { selectionSavings } from "./selection_stats.js";
 import { metricsLines, moreSimilarEngine } from "./metrics_format.js";
+import { mixToMono, trimSamples, encodeWav16, waveformPeaks, speechChunks, speechSecondsInRange,
+         hasAllowedExtension } from "./audio_prep.js";
 
 // MediaPipe is loaded later, only when Finger mode needs it.
 // That way, if it fails to download, the camera still works.
@@ -479,6 +481,7 @@ function renderProfiles() {
 function applyProfileToVoiceControls() {
   const isStock = activeProfile?.voice_type === "stock";
   if (guided.profileId && guided.profileId !== activeProfile?.id) closeGuidedPanel();
+  if (upload.profileId && upload.profileId !== activeProfile?.id) closeUploadPanel();
   const stockNote = document.getElementById("stockNote");
 
   document.getElementById("recordControls").hidden = isStock;
@@ -537,11 +540,17 @@ function chosenVoiceType() {
   return document.querySelector('input[name="voiceType"]:checked').value;
 }
 
+const CONSENT_TEXTS = {
+  cloned: "I agree that my voice may be recorded and cloned for ReVoice. I can ask for it to be deleted at any time.",
+  upload: "I am this person or their family/legal guardian and have the right to use their recordings to recreate their voice.",
+};
+
 function updateAddUserForm() {
-  const stock = chosenVoiceType() === "stock";
-  document.getElementById("stockRow").hidden = !stock;
+  const type = chosenVoiceType();
+  document.getElementById("stockRow").hidden = type !== "stock";
   // consent is about copying someone's real voice, so only needed for cloning
-  document.getElementById("consentRow").hidden = stock;
+  document.getElementById("consentRow").hidden = type === "stock";
+  if (CONSENT_TEXTS[type]) document.getElementById("consentText").textContent = CONSENT_TEXTS[type];
 }
 
 async function loadStockSpeakers() {
@@ -587,16 +596,18 @@ document.getElementById("createUserBtn").onclick = async () => {
 
   // quick checks here; the backend checks again (it has the final say)
   if (!name) { statusEl.textContent = "Please enter a name."; return; }
-  if (voiceType === "cloned" && !consent) {
+  // "upload" = a cloned voice made from old recordings instead of new ones
+  const cloned = voiceType === "cloned" || voiceType === "upload";
+  if (cloned && !consent) {
     statusEl.textContent = "Please tick the consent box before cloning a voice.";
     return;
   }
 
   const formData = new FormData();
   formData.append("name", name);
-  formData.append("voice_type", voiceType);
+  formData.append("voice_type", cloned ? "cloned" : voiceType);
   formData.append("stock_speaker", voiceType === "stock" ? document.getElementById("stockSpeaker").value : "");
-  formData.append("consent_given", voiceType === "cloned" && consent ? "true" : "false");
+  formData.append("consent_given", cloned && consent ? "true" : "false");
 
   const res = await fetch("/profiles", { method: "POST", body: formData });
   const data = await res.json().catch(() => ({}));
@@ -611,7 +622,10 @@ document.getElementById("createUserBtn").onclick = async () => {
   addUserPanel.hidden = true;
   await loadProfiles();
   document.getElementById("profileStatus").textContent =
-    voiceType === "cloned" ? `Added ${name}. Now record a voice clip for each emotion.` : `Added ${name}.`;
+    voiceType === "cloned" ? `Added ${name}. Now record a voice clip for each emotion.`
+    : voiceType === "upload" ? `Added ${name}. Now add their old recordings below.`
+    : `Added ${name}.`;
+  if (voiceType === "upload") openUploadPanel();
 };
 
 // ---------- MICROPHONE (shared by both recorders) ----------
@@ -644,14 +658,20 @@ async function updateVoiceBankStatus() {
     const counts = await res.json();
     const emotion = document.getElementById("emotion").value;
     const n = counts[emotion] || 0;
-    let usingRefs = false;
+    // no clip for this emotion: the server falls back to uploaded recordings, then guided ones
+    let fallback = "";
     if (n === 0) {
-      const g = await (await fetch(`/guided/status?profile_id=${encodeURIComponent(activeProfile.id)}`)).json();
-      usingRefs = (g.references || []).length > 0;
+      const pid = encodeURIComponent(activeProfile.id);
+      const up = await (await fetch(`/uploads?profile_id=${pid}`)).json();
+      if ((up.clips || []).length) fallback = "the uploaded old recordings";
+      else {
+        const g = await (await fetch(`/guided/status?profile_id=${pid}`)).json();
+        if ((g.references || []).length) fallback = "your guided recordings";
+      }
     }
     statusEl.textContent =
       n > 0 ? `${n} clip(s) saved for "${emotion}" (${activeProfile.name}). 2-3 gives the best result.`
-      : usingRefs ? `No "${emotion}" clip yet, so your guided recordings will be used (${activeProfile.name}).`
+      : fallback ? `No "${emotion}" clip yet, so ${fallback} will be used (${activeProfile.name}).`
       : `No clips yet for "${emotion}" (${activeProfile.name}).`;
   } catch (err) { /* ignore */ }
 }
@@ -1187,6 +1207,306 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "ArrowLeft") goToGuided(guided.index - 1);
   else if (e.key.toLowerCase() === "p") playGuided();
 });
+
+// ---------- UPLOAD OLD RECORDINGS ----------
+// For someone who has already lost their voice. Everything happens in the browser:
+//   1. decode the file (mp3, voice note, video...) with the Web Audio API
+//   2. the caregiver drags two handles on the waveform to keep only the person's voice
+//   3. that part is mixed to mono, resampled to 24 kHz and saved as a WAV
+// Only that clean WAV is uploaded. Caregiver screen, so mouse-only is fine.
+const UPLOAD_RATE = 24000;            // sample rate of the uploaded WAV (what the voice models use)
+const MAX_CLIP_SECONDS = 120;         // same limits as the server
+const MIN_CLIP_SECONDS = 1;
+const MAX_FILE_MB = 200;              // bigger files (long videos) would use too much memory
+const upload = {
+  profileId: null,    // who the recordings belong to (fixed while the panel is open)
+  items: [],          // one per chosen file
+  audioCtx: null,     // used to decode and to preview
+  previewing: null,   // the sound currently playing
+};
+const uploadEl = (id) => document.getElementById(id);
+
+function openUploadPanel() {
+  if (!activeProfile || activeProfile.voice_type !== "cloned") return;
+  upload.profileId = activeProfile.id;
+  upload.audioCtx = upload.audioCtx || new AudioContext();
+  uploadEl("uploadPanel").hidden = false;
+  uploadEl("uploadStatus").textContent = "";
+  uploadEl("uploadPanel").scrollIntoView({ behavior: "smooth" });
+  refreshSavedUploads();
+}
+
+function closeUploadPanel() {
+  stopPreview();
+  upload.items = [];
+  uploadEl("uploadList").replaceChildren();
+  uploadEl("uploadFiles").value = "";
+  upload.profileId = null;
+  uploadEl("uploadPanel").hidden = true;
+  updateVoiceBankStatus();
+}
+
+uploadEl("openUploadBtn").onclick = openUploadPanel;
+uploadEl("uploadCloseBtn").onclick = closeUploadPanel;
+
+// ----- 1. choosing files -----
+uploadEl("uploadFiles").onchange = (e) => {
+  for (const file of e.target.files) addUploadItem(file);
+  e.target.value = "";            // so the same file can be chosen again later
+};
+
+async function addUploadItem(file) {
+  const item = { file, name: file.name, status: "decoding", start: 0, end: 0, include: true };
+  upload.items.push(item);
+  buildUploadCard(item);
+
+  if (!hasAllowedExtension(file.name)) {
+    return setItemError(item, "Not a supported file type. Use mp3, m4a, wav, ogg, opus, webm or mp4.");
+  }
+  if (file.size > MAX_FILE_MB * 1024 * 1024) {
+    return setItemError(item, `File is larger than ${MAX_FILE_MB} MB. Cut it shorter first.`);
+  }
+  try {
+    // the browser's own decoder: handles mp3, aac/m4a/mp4, ogg/opus, webm, wav
+    item.buffer = await upload.audioCtx.decodeAudioData(await file.arrayBuffer());
+  } catch (err) {
+    console.warn("decode failed", file.name, err);
+    return setItemError(item, "This browser couldn't read the audio in this file (unsupported codec or " +
+                              "damaged file). Try Chrome, or convert it to mp3/wav first.");
+  }
+  const channels = [];
+  for (let c = 0; c < item.buffer.numberOfChannels; c++) channels.push(item.buffer.getChannelData(c));
+  item.mono = mixToMono(channels);
+  item.rate = item.buffer.sampleRate;
+  item.duration = item.buffer.duration;
+  item.end = Math.min(item.duration, MAX_CLIP_SECONDS);
+  item.chunks = speechChunks(item.mono, item.rate);        // for "how much is speech"
+  item.status = item.duration < MIN_CLIP_SECONDS ? "error" : "ready";
+  if (item.status === "error") return setItemError(item, "This recording is shorter than 1 second.");
+  drawUploadCard(item);
+}
+
+// ----- 2. one card per file: waveform + trim handles + preview -----
+function buildUploadCard(item) {
+  const card = document.createElement("div");
+  card.className = "upload-card";
+  card.innerHTML = `
+    <div class="controls-row">
+      <strong class="upload-name"></strong>
+      <span class="hint upload-state">reading the file...</span>
+      <label><input type="checkbox" class="upload-include" checked /> include</label>
+      <button class="upload-remove">Remove</button>
+    </div>
+    <canvas width="760" height="80" hidden></canvas>
+    <div class="controls-row upload-trim-row" hidden>
+      <button class="upload-preview">&#9654; Preview</button>
+      <span class="upload-trim"></span>
+    </div>`;
+  card.querySelector(".upload-name").textContent = item.name;     // textContent: file names are not HTML
+  card.querySelector(".upload-include").onchange = (e) => { item.include = e.target.checked; };
+  card.querySelector(".upload-remove").onclick = () => {
+    stopPreview();
+    upload.items = upload.items.filter((i) => i !== item);
+    card.remove();
+  };
+  card.querySelector(".upload-preview").onclick = () => previewItem(item);
+  item.card = card;
+  item.canvas = card.querySelector("canvas");
+  attachTrimHandles(item);
+  uploadEl("uploadList").appendChild(card);
+}
+
+function setItemError(item, message) {
+  item.status = "error";
+  item.card.classList.add("error");
+  item.card.querySelector(".upload-state").textContent = message;
+  item.card.querySelector(".upload-include").checked = item.include = false;
+}
+
+function drawUploadCard(item) {
+  const card = item.card;
+  card.querySelector("canvas").hidden = false;
+  card.querySelector(".upload-trim-row").hidden = false;
+  card.querySelector(".upload-state").textContent =
+    item.status === "saved" ? "saved ✓" : `${item.duration.toFixed(1)} s recording`;
+  drawWaveform(item);
+  updateTrimText(item);
+}
+
+function drawWaveform(item) {
+  const c = item.canvas, g = c.getContext("2d");
+  const W = c.width, H = c.height;
+  item.peaks = item.peaks || waveformPeaks(item.mono, W);
+  const x = (t) => (t / item.duration) * W;
+  g.clearRect(0, 0, W, H);
+  // the part that will be KEPT is green, the rest is grey
+  for (let px = 0; px < W; px++) {
+    const t = (px / W) * item.duration;
+    const [min, max] = item.peaks[px];
+    g.fillStyle = t >= item.start && t <= item.end ? "#0a7a4f" : "#bbb";
+    g.fillRect(px, H / 2 - max * H / 2, 1, Math.max(1, (max - min) * H / 2));
+  }
+  g.fillStyle = "rgba(0,0,0,0.06)";
+  g.fillRect(0, 0, x(item.start), H);
+  g.fillRect(x(item.end), 0, W - x(item.end), H);
+  // the two handles
+  for (const t of [item.start, item.end]) {
+    g.fillStyle = "#0a7a4f";
+    g.fillRect(x(t) - 2, 0, 4, H);
+    g.fillRect(x(t) - 7, H / 2 - 12, 14, 24);
+  }
+}
+
+function updateTrimText(item) {
+  const length = item.end - item.start;
+  item.speech = speechSecondsInRange(item.chunks, item.start, item.end);
+  const tooLong = length > MAX_CLIP_SECONDS ? ` <span class="warn-text">max ${MAX_CLIP_SECONDS} s per clip</span>` : "";
+  item.card.querySelector(".upload-trim").innerHTML =
+    `keep ${item.start.toFixed(1)} s → ${item.end.toFixed(1)} s ` +
+    `(<b>${length.toFixed(1)} s</b>, about ${item.speech.toFixed(1)} s of speech)${tooLong}`;
+}
+
+// drag the handle nearest to where you press; clicks anywhere move the nearest handle
+function attachTrimHandles(item) {
+  const c = item.canvas;
+  let dragging = null;
+  const timeAt = (e) => {
+    const r = c.getBoundingClientRect();
+    return Math.max(0, Math.min(item.duration, ((e.clientX - r.left) / r.width) * item.duration));
+  };
+  const move = (e) => {
+    const t = timeAt(e);
+    if (dragging === "start") item.start = Math.min(t, item.end - MIN_CLIP_SECONDS);
+    else item.end = Math.max(t, item.start + MIN_CLIP_SECONDS);
+    item.start = Math.max(0, item.start);
+    item.end = Math.min(item.duration, item.end);
+    drawWaveform(item);
+    updateTrimText(item);
+  };
+  c.onpointerdown = (e) => {
+    if (item.status !== "ready") return;
+    const t = timeAt(e);
+    dragging = Math.abs(t - item.start) <= Math.abs(t - item.end) ? "start" : "end";
+    try { c.setPointerCapture(e.pointerId); } catch { /* keeps working, just without capture */ }
+    move(e);
+  };
+  c.onpointermove = (e) => { if (dragging) move(e); };
+  c.onpointerup = () => { dragging = null; };
+}
+
+function stopPreview() {
+  if (upload.previewing) { try { upload.previewing.stop(); } catch { /* already stopped */ } }
+  upload.previewing = null;
+}
+
+function previewItem(item) {
+  stopPreview();
+  if (!item.buffer) return;
+  upload.audioCtx.resume();
+  const src = upload.audioCtx.createBufferSource();
+  src.buffer = item.buffer;
+  src.connect(upload.audioCtx.destination);
+  src.start(0, item.start, item.end - item.start);      // play only the kept part
+  upload.previewing = src;
+}
+
+// ----- 3. save: trim -> mono -> 24 kHz -> WAV -> upload -----
+async function toUploadWav(item) {
+  const part = trimSamples(item.mono, item.rate, item.start, item.end);
+  // let the browser resample properly (it filters out frequencies that would distort)
+  const frames = Math.max(1, Math.round((part.length / item.rate) * UPLOAD_RATE));
+  const offline = new OfflineAudioContext(1, frames, UPLOAD_RATE);
+  const buf = offline.createBuffer(1, part.length, item.rate);
+  buf.copyToChannel(part, 0);
+  const src = offline.createBufferSource();
+  src.buffer = buf;
+  src.connect(offline.destination);
+  src.start();
+  const rendered = await offline.startRendering();
+  return new Blob([encodeWav16(rendered.getChannelData(0), UPLOAD_RATE)], { type: "audio/wav" });
+}
+
+uploadEl("uploadSaveBtn").onclick = async () => {
+  const statusEl = uploadEl("uploadStatus");
+  const consent = uploadEl("uploadConsent").checked;
+  const consentName = uploadEl("uploadConsentName").value.trim();
+  const toSave = upload.items.filter((i) => i.status === "ready" && i.include);
+
+  if (!toSave.length) { statusEl.textContent = "Choose at least one readable file (and keep 'include' ticked)."; return; }
+  if (!consent || !consentName) { statusEl.textContent = "Please tick the consent box and enter your name."; return; }
+  const tooLong = toSave.find((i) => i.end - i.start > MAX_CLIP_SECONDS);
+  if (tooLong) { statusEl.textContent = `"${tooLong.name}": keep ${MAX_CLIP_SECONDS} s or less.`; return; }
+
+  uploadEl("uploadSaveBtn").disabled = true;
+  let saved = 0;
+  for (const item of toSave) {
+    item.card.querySelector(".upload-state").textContent = "saving...";
+    try {
+      const formData = new FormData();
+      formData.append("profile_id", upload.profileId);
+      formData.append("original_name", item.name);
+      formData.append("start_s", item.start.toFixed(3));
+      formData.append("end_s", item.end.toFixed(3));
+      formData.append("speech_s", item.speech.toFixed(2));
+      formData.append("consent", "true");
+      formData.append("consented_by", consentName);
+      formData.append("file", await toUploadWav(item), "clip.wav");
+      const res = await fetch("/uploads", { method: "POST", body: formData });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `server returned ${res.status}`);
+      item.status = "saved";
+      item.card.classList.add("saved");
+      item.card.querySelector(".upload-state").textContent = "saved ✓";
+      saved++;
+      showSavedUploads(data);
+    } catch (err) {
+      item.card.querySelector(".upload-state").textContent = "not saved: " + err.message;
+    }
+  }
+  uploadEl("uploadSaveBtn").disabled = false;
+  statusEl.textContent = `Saved ${saved} of ${toSave.length} clip(s).`;
+};
+
+// ----- the clips already saved for this person -----
+async function refreshSavedUploads() {
+  const res = await fetch(`/uploads?profile_id=${encodeURIComponent(upload.profileId)}`);
+  if (res.ok) showSavedUploads(await res.json());
+}
+
+function showSavedUploads(data) {
+  const box = uploadEl("uploadSaved");
+  box.replaceChildren(...data.clips.map((clip) => {
+    const row = document.createElement("div");
+    row.className = "upload-saved-row";
+    row.textContent = `${clip.original_name} — ${clip.duration_s.toFixed(1)} s ` +
+      `(about ${clip.speech_s.toFixed(1)} s of speech) · consent: ${clip.consented_by}, ` +
+      `${new Date(clip.consented_at).toLocaleDateString()} `;      // shown in local time
+    const del = document.createElement("button");
+    del.textContent = "Delete";
+    del.onclick = async () => {
+      if (!confirm(`Delete "${clip.original_name}" from ${activeProfile?.name || "this user"}?`)) return;
+      const r = await fetch(`/uploads/${clip.id}?profile_id=${encodeURIComponent(upload.profileId)}`,
+                            { method: "DELETE" });
+      if (r.ok) showSavedUploads(await r.json());
+    };
+    row.appendChild(del);
+    return row;
+  }));
+  if (!data.clips.length) box.textContent = "None yet.";
+
+  const totalEl = uploadEl("uploadTotal");
+  totalEl.textContent = data.clips.length
+    ? `${data.clips.length} clip(s), ${data.total_seconds.toFixed(1)} s in total, ` +
+      `about ${data.total_speech_seconds.toFixed(1)} s of speech.`
+    : "";
+  if (data.clips.length && !data.enough_speech) {
+    const warn = document.createElement("span");
+    warn.className = "warn-text";
+    warn.textContent = ` Only ${data.total_speech_seconds.toFixed(0)} s of speech: at least ` +
+      `${data.min_total_speech_seconds} s is recommended, or the cloned voice may not sound like them.`;
+    totalEl.appendChild(warn);
+  }
+}
 
 // ---------- START ----------
 // Runs last, so everything above is defined before we load the users.

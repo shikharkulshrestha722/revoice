@@ -40,6 +40,8 @@ frontend/   index.html, style.css
                          ("both" runs sequentially — one shared GPU — and shows timings)
             tracking.js  PURE logic, no DOM (keep it that way so it stays testable):
                          OneEuroFilter, PointerTracker, detectLaserBlob, DwellSelector
+            audio_prep.js PURE: mixToMono, trimSamples, encodeWav16, waveformPeaks,
+                         speechChunks/speechSecondsInRange, allowed upload extensions
             metrics_format.js PURE: metrics -> lines under players; moreSimilarEngine()
             selection_stats.js PURE: selections vs letter-by-letter (letters + single
                          spaces), same rule as generation_log.py
@@ -64,6 +66,12 @@ backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select
                          skipped, references). /speak uses guided references when an
                          emotion has no clips. pick_references = longest takes to ~30 s
                          (XTTS concatenates refs and uses the first gpt_cond_len=30 s).
+            uploads (profiles.py): data/profiles/<id>/uploads/NNNNNN.wav + manifest.json
+                         (original name, trim, duration, speech_s, consented_by/at + exact
+                         statement). Browser decodes/trims/resamples (audio_prep.js +
+                         OfflineAudioContext) and posts mono 16-bit 24 kHz WAV; server checks
+                         consent, extension, 8 MB, WAV format, trim 1-120 s matching length.
+                         /speak voice order: emotion clips > uploads > guided references.
             guided_sentences.py  350 sentences: g001-g150 short phrases, g151-g350 longer
                          (12-20 words, no names/digits/abbreviations; tests enforce it).
                          ~26 min of speech. NEVER renumber; append only. SESSION_SIZE=50.
@@ -121,6 +129,9 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
 - [x] 2 Guided voice banking (150 sentences, transcript per clip, LJSpeech zip export).
       Extended to 350 sentences (~26 min) in sessions of 50.
 - [x] Report evidence (before Phase 3): generation log CSV, selection counter, report.py
+- [x] Part A stability (Colab v6/v7 + metrics), F5 default — tag `review-safe` on main
+- [ ] Part B upload old recordings — branch `upload-recordings` (merge after manual test)
+- [ ] Part C light XTTS fine-tune
 - [ ] 3 Fine-tune XTTS (colab/finetune_xtts.ipynb, checkpoints to Drive, engine "xtts_ft")
 - [ ] 4 Safety layer: Emergency Override, False Selection Guard, Ambiguous Phrase Check,
       Caregiver Validation (Confirm / Escalate / Override, toggleable)

@@ -71,6 +71,8 @@ node --test "frontend/tests/*.test.mjs"
    - *Record my voice*: the person's voice is cloned. They must tick the consent box.
    - *Use a stock voice*: for someone with no healthy voice left to record. Pick one of
      XTTS's built-in voices (works with XTTS-v2 only).
+   - *Use old recordings*: for someone who can no longer record — see "Upload old
+     recordings" below. A family member or legal guardian gives consent.
    - **Delete user** removes the user and all their recordings from disk, and tells Colab
      to forget the voice. (Use this after cloning a volunteer's voice in a demo.)
 2. Click **Start Camera** and allow webcam access.
@@ -91,6 +93,24 @@ node --test "frontend/tests/*.test.mjs"
      .webm clips and the Colab fine-tuning notebook converts them.
 6. Pick a voice engine — **F5-TTS** (default), **XTTS-v2**, or **Compare both** (generates with
    each, one after the other, and shows how long each took) — then **Generate & Speak**.
+
+## Upload old recordings (for someone who has already lost their voice)
+
+In the Voice Bank section click **Upload old recordings** (or create the user with
+*Use old recordings*). Choose one or more files: mp3, m4a, wav, WhatsApp voice notes
+(.opus/.ogg), webm or mp4 videos.
+
+- Everything is decoded **in the browser** (no ffmpeg needed on Windows, no Colab changes).
+  A file the browser can't read gets a clear message.
+- Each file shows a waveform: drag the two **green handles** so only the person's own voice
+  is kept (cut out other speakers, music, background chatter), press **▶ Preview** to check.
+- Tick the consent box ("I am this person or their family/legal guardian and have the
+  right to use these recordings") and enter your name, then **Save trimmed clips**. Who
+  consented and when is stored with every clip.
+- Only a clean mono 24 kHz WAV of the kept part is uploaded. Saved clips show their length
+  and speech time; under 15 s of speech in total gives a warning.
+- When an emotion has no recorded clip, speech uses the uploaded recordings (both F5-TTS and
+  XTTS), before guided recordings.
 
 ## Evidence for the report
 
