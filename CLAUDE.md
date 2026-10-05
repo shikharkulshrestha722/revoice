@@ -21,7 +21,8 @@ right emotional tone.
 - **Always use Python 3.10 (`py -3.10`) for BOTH the backend and the tests**, so they run
   on the same interpreter. (Plain `python` on PATH is 3.11 and has no FastAPI.)
   - Run backend: `cd backend; py -3.10 -m uvicorn app:app --reload` → http://localhost:8000
-  - Run tests:   `cd backend; py -3.10 -m pytest`
+  - Run tests:   `cd backend; py -3.10 -m pytest`   and   `node --test "frontend/tests/*.test.mjs"`
+    (Node 24 needs the quoted file pattern, not a folder)
   - Install deps: `py -3.10 -m pip install -r backend/requirements.txt`
 - Settings: copy `backend/.env.example` to `backend/.env` (COLAB_API_URL, GEMINI_API_KEY).
 - Voice models run on Google Colab (free T4) via ngrok. Static ngrok domain:
@@ -39,6 +40,9 @@ frontend/   index.html, style.css
                          ("both" runs sequentially — one shared GPU — and shows timings)
             tracking.js  PURE logic, no DOM (keep it that way so it stays testable):
                          OneEuroFilter, PointerTracker, detectLaserBlob, DwellSelector
+            audio_checks.js PURE: analyzeLevels() flags too_quiet / clipping using the
+                         90th-percentile 10 ms chunk RMS (a start click can't hide a quiet take)
+            tests/       node:test tests for the pure JS modules
 backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select,
                          DELETE /profiles/{id} (also calls Colab /forget_voices),
                          GET /stock_speakers, POST /upload_voice_clip, GET /voice_bank,
@@ -50,6 +54,15 @@ backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select
             profiles.py  ProfileStore: data/profiles/<id>/profile.json + clips/<emotion>/
                          000001.webm... (newest 3 kept). data/settings.json = selected user.
                          Ids are validated (SAFE_ID) because they become folder names.
+                         guided/<gNNN>.webm + guided/manifest.json (exact text, duration,
+                         skipped, references). /speak uses guided references when an
+                         emotion has no clips. pick_references = longest takes to ~30 s
+                         (XTTS concatenates refs and uses the first gpt_cond_len=30 s).
+            guided_sentences.py  150 sentences, ids g001..g150 — NEVER renumber; append only.
+            dataset_export.py    LJSpeech zip: metadata.csv `id|text|text`, no header, "
+"
+                         endings; wavs/ (22050 mono) if ffmpeg on PATH, else raw/ webm
+                         (ffmpeg is NOT installed on this Windows machine).
             predictor.py Gemini prompt, reply parsing, offline fallback, is_sensible()
             tests/       pytest; Colab + Gemini always mocked, real network calls fail;
                          each test gets a temporary data folder (never touches backend/data)
@@ -78,7 +91,8 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
 - [x] 0 Foundation: git, .env, no-cache, tests, engine selector restored
 - [x] 1 User profiles + persistent voice bank, delete, switcher, Add user panel,
       stock XTTS speakers (notebook v5)
-- [ ] 2 Guided voice banking (~150 sentences, transcript per clip, LJSpeech zip export)
+- [x] 2 Guided voice banking (150 sentences, transcript per clip, LJSpeech zip export).
+      NOTE: 150 short sentences ≈ 6-8 min of audio, below the 15-30 min fine-tuning needs.
 - [ ] 3 Fine-tune XTTS (colab/finetune_xtts.ipynb, checkpoints to Drive, engine "xtts_ft")
 - [ ] 4 Safety layer: Emergency Override, False Selection Guard, Ambiguous Phrase Check,
       Caregiver Validation (Confirm / Escalate / Override, toggleable)

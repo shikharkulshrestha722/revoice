@@ -55,6 +55,8 @@ Go to **http://localhost:8000** in Chrome.
 ```powershell
 cd backend
 py -3.10 -m pytest
+cd ..
+node --test "frontend/tests/*.test.mjs"
 ```
 
 ## How to use it
@@ -71,7 +73,16 @@ py -3.10 -m pytest
    dwell on one to use it.
 4. Pick an emotion, click **Record Voice Clip**, and speak naturally in that tone
    (6–20 s; click again to stop early). 2–3 clips per emotion works best.
-5. Pick a voice engine — **XTTS-v2**, **F5-TTS**, or **Compare both** (generates with
+5. **Guided voice banking** (optional, for a better voice): click *Guided voice banking*
+   and read the sentences one at a time (<kbd>Space</kbd> record/stop, <kbd>→</kbd> skip,
+   <kbd>←</kbd> back, <kbd>P</kbd> play). It remembers where you stopped. Too-quiet or
+   distorted takes are flagged so you can redo them.
+   - *Use my best recordings as voice references*: speech then works for every emotion
+     even without separate emotion clips.
+   - *Download dataset (.zip)*: an LJSpeech-style training set (metadata.csv + audio) for
+     fine-tuning XTTS on this voice. Without ffmpeg installed, the zip holds the original
+     .webm clips and the Colab fine-tuning notebook converts them.
+6. Pick a voice engine — **XTTS-v2**, **F5-TTS**, or **Compare both** (generates with
    each, one after the other, and shows how long each took) — then **Generate & Speak**.
 
 ## Known limitations (honest, worth mentioning in the report)
