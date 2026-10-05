@@ -1,13 +1,75 @@
+/* ============================================================
+   ReVoice — styles
+   ============================================================
+   Every colour, size and spacing value is a CSS variable on :root,
+   so the whole look (and the dark theme) is controlled in one place.
+   The camera overlay (app.js) reads the same --canvas-* variables.
+   ============================================================ */
+
+:root {
+  /* ---- colours: light theme (all text pairs checked for WCAG AA) ---- */
+  --bg: #F4F6F8;               /* page background */
+  --surface: #FFFFFF;          /* cards */
+  --surface-2: #EDF1F5;        /* inputs, metric boxes, inner areas */
+  --text: #16212E;
+  --text-muted: #4A5767;
+  --border: #D5DCE4;           /* decorative card borders */
+  --border-strong: #7B8897;    /* form controls (needs 3:1) */
+  --accent: #0F766E;
+  --accent-hover: #0B5F59;
+  --on-accent: #FFFFFF;        /* text on accent buttons */
+  --accent-soft: #DDF1EE;      /* selected / winner backgrounds */
+  --success: #15803D;
+  --warning: #A15C07;
+  --warning-soft: #FFF6E0;
+  --warning-border: #E9C46A;
+  --danger: #B42318;
+  --danger-soft: #FDECEA;
+  --recording: #D92D20;
+  --focus-ring: #0F766E;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 2px 8px rgba(16, 24, 40, 0.06);
+
+  /* camera overlay (canvas) colours, read by app.js */
+  --canvas-chip: rgba(255, 255, 255, 0.90);    /* behind each letter */
+  --canvas-chip-text: #16212E;
+  --canvas-bar: rgba(255, 255, 255, 0.80);     /* prediction bar */
+  --canvas-grid: rgba(255, 255, 255, 0.75);
+  --canvas-grid-outline: rgba(0, 0, 0, 0.45);
+  --canvas-active: rgba(15, 118, 110, 0.45);   /* cell under the pointer */
+  --canvas-pointer: #14B8A6;
+  --canvas-flash: rgba(255, 255, 255, 0.85);   /* "selected!" flash */
+  --canvas-muted-text: rgba(22, 33, 46, 0.55);
+
+  /* ---- type ---- */
+  --font-ui: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-read: "Atkinson Hyperlegible", var(--font-ui);   /* very legible: sentence, letters */
+  --text-sm: 13px;
+  --text-md: 15px;
+  --text-lg: 18px;
+
+  /* ---- spacing scale and shapes ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --target: 44px;              /* minimum height of clickable controls */
+}
+
 body {
-  font-family: Arial, sans-serif;
-  background: #fafafa;
-  color: #222;
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  background: var(--bg);
+  color: var(--text);
   margin: 0;
   padding: 20px;
 }
 
 h1 { margin-bottom: 0; }
-.subtitle { color: #666; margin-top: 4px; }
+.subtitle { color: var(--text-muted); margin-top: 4px; }
 
 .main-layout {
   display: flex;
@@ -17,8 +79,8 @@ h1 { margin-bottom: 0; }
 }
 
 .panel {
-  background: #fff;
-  border: 1px solid #ddd;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 16px;
   flex: 1;
@@ -46,18 +108,18 @@ h1 { margin-bottom: 0; }
 }
 
 .selection-stats {
-  font-size: 13px;
-  color: #0a5c3b;
+  font-size: var(--text-sm);
+  color: var(--accent);
   margin: -4px 0 8px;
 }
 
 .composed-box {
   min-height: 60px;
-  border: 1px solid #ccc;
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 10px;
   font-size: 20px;
-  background: #f5f5f5;
+  background: var(--surface-2);
   margin-bottom: 10px;
 }
 
@@ -65,12 +127,13 @@ button {
   padding: 8px 14px;
   margin: 6px 4px 6px 0;
   border-radius: 6px;
-  border: 1px solid #999;
-  background: #fff;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
   cursor: pointer;
 }
 
-button:hover { background: #eee; }
+button:hover { background: var(--surface-2); }
 
 select {
   padding: 6px;
@@ -78,7 +141,7 @@ select {
 }
 
 #recordStatus, #speakStatus {
-  color: #555;
+  color: var(--text-muted);
   font-size: 14px;
 }
 
@@ -91,8 +154,8 @@ select {
 }
 
 .hint {
-  color: #555;
-  font-size: 13px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
   margin: 4px 0;
 }
 
@@ -105,7 +168,7 @@ select {
 }
 
 .compare-item {
-  border: 1px solid #ddd;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px;
 }
@@ -118,20 +181,20 @@ select {
 
 .metrics {
   font-size: 12px;
-  color: #333;
-  background: #f6f8fa;
+  color: var(--text);
+  background: var(--surface-2);
   border-radius: 4px;
   padding: 4px 6px;
   margin-top: 4px;
 }
 
 .compare-item.winner {
-  border: 2px solid #0a7a4f;
-  background: #f1faf5;
+  border: 2px solid var(--accent);
+  background: var(--accent-soft);
 }
 
 .winner-badge {
-  color: #0a7a4f;
+  color: var(--accent);
   font-weight: bold;
   font-size: 12px;
   margin-left: 6px;
@@ -140,13 +203,13 @@ select {
 .ref-text {
   font-size: 12px;
   font-style: italic;
-  color: #555;
+  color: var(--text-muted);
   margin: 4px 0 0;
 }
 
 .compare-time {
-  color: #555;
-  font-size: 13px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
 }
 
 /* the "hidden" attribute must win over display:flex above */
@@ -160,8 +223,8 @@ select {
   flex-wrap: wrap;
   margin-top: 14px;
   padding: 8px 12px;
-  background: #fff;
-  border: 1px solid #ddd;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
 }
 
@@ -174,17 +237,17 @@ select {
 }
 
 .profile-buttons button.active {
-  background: #0a7a4f;
-  border-color: #0a7a4f;
-  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
   font-weight: bold;
 }
 
 button.danger {
-  border-color: #c0392b;
-  color: #c0392b;
+  border-color: var(--danger);
+  color: var(--danger);
 }
-button.danger:hover { background: #fdecea; }
+button.danger:hover { background: var(--danger-soft); }
 
 /* ---------- add user panel ---------- */
 .add-user {
@@ -199,7 +262,7 @@ button.danger:hover { background: #fdecea; }
 }
 
 .add-user fieldset {
-  border: 1px solid #ddd;
+  border: 1px solid var(--border);
   border-radius: 6px;
   margin: 8px 0;
 }
@@ -213,8 +276,8 @@ button.danger:hover { background: #fdecea; }
   display: block;
   margin: 10px 0;
   padding: 8px;
-  background: #fff8e1;
-  border: 1px solid #f0d58a;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
   border-radius: 6px;
 }
 
@@ -231,14 +294,14 @@ button.danger:hover { background: #fdecea; }
 }
 
 .upload-card {
-  border: 1px solid #ddd;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px;
   margin: 8px 0;
 }
 
-.upload-card.error { border-color: #c0392b; background: #fdf3f2; }
-.upload-card.saved { border-color: #0a7a4f; background: #f1faf5; }
+.upload-card.error { border-color: var(--danger); background: var(--danger-soft); }
+.upload-card.saved { border-color: var(--accent); background: var(--accent-soft); }
 
 .upload-card canvas {
   display: block;
@@ -247,17 +310,17 @@ button.danger:hover { background: #fdecea; }
   margin: 6px 0;
   cursor: ew-resize;
   touch-action: none;
-  background: #fafafa;
+  background: var(--surface-2);
   border-radius: 4px;
 }
 
 .upload-saved-row {
-  font-size: 13px;
+  font-size: var(--text-sm);
   padding: 3px 0;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--border);
 }
 
-.warn-text { color: #b9770e; font-weight: bold; }
+.warn-text { color: var(--warning); font-weight: bold; }
 
 /* ---------- guided voice banking ---------- */
 .guided {
@@ -267,7 +330,7 @@ button.danger:hover { background: #fdecea; }
 
 .guided-progress {
   height: 10px;
-  background: #eee;
+  background: var(--surface-2);
   border-radius: 5px;
   overflow: hidden;
 }
@@ -275,7 +338,7 @@ button.danger:hover { background: #fdecea; }
 .guided-bar {
   height: 100%;
   width: 0;
-  background: #0a7a4f;
+  background: var(--accent);
   transition: width 0.3s;
 }
 
@@ -286,39 +349,39 @@ button.danger:hover { background: #fdecea; }
   line-height: 1.3;
   padding: 18px;
   margin: 6px 0 10px;
-  border: 2px solid #ddd;
+  border: 2px solid var(--border);
   border-radius: 8px;
-  background: #fcfcfc;
+  background: var(--surface-2);
   min-height: 80px;
 }
 
-.guided-sentence.recorded { border-color: #0a7a4f; }
-.guided-sentence.recording { border-color: #c0392b; background: #fff5f4; }
+.guided-sentence.recorded { border-color: var(--accent); }
+.guided-sentence.recording { border-color: var(--recording); background: var(--danger-soft); }
 
 .guided-status { min-height: 1.2em; }
-.guided-status.warn { color: #b9770e; font-weight: bold; }
+.guided-status.warn { color: var(--warning); font-weight: bold; }
 
 .guided-footer {
-  border-top: 1px solid #eee;
+  border-top: 1px solid var(--border);
   padding-top: 8px;
   margin-top: 8px;
 }
 
 button.primary {
-  background: #0a7a4f;
-  border-color: #0a7a4f;
-  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
   font-weight: bold;
   min-width: 110px;
 }
-button.primary:hover { background: #086640; }
-button.primary.recording { background: #c0392b; border-color: #c0392b; }
+button.primary:hover { background: var(--accent-hover); }
+button.primary.recording { background: var(--recording); border-color: var(--recording); }
 
 kbd {
-  border: 1px solid #bbb;
+  border: 1px solid var(--border-strong);
   border-bottom-width: 2px;
   border-radius: 3px;
   padding: 0 4px;
   font-size: 12px;
-  background: #fff;
+  background: var(--surface);
 }

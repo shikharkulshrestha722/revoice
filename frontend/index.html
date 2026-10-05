@@ -213,13 +213,13 @@
       var status = document.getElementById("trackStatus");
       if (location.protocol === "file:") {
         status.textContent = "Open this page through the server: run the backend, then go to http://localhost:8000";
-        status.style.color = "#c0392b";
+        status.style.color = "var(--danger)";
         return;
       }
       setTimeout(function () {
         if (!window.__revoiceLoaded) {
           status.textContent = "app.js failed to load. Press F12 → Console to see the error, and make sure you opened http://localhost:8000";
-          status.style.color = "#c0392b";
+          status.style.color = "var(--danger)";
         }
       }, 3000);
     })();
