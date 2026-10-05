@@ -9,6 +9,7 @@
 
 import { PointerTracker, DwellSelector, detectLaserBlob } from "./tracking.js";
 import { analyzeLevels, PROBLEM_MESSAGES } from "./audio_checks.js";
+import { selectionSavings } from "./selection_stats.js";
 
 // MediaPipe is loaded later, only when Finger mode needs it.
 // That way, if it fails to download, the camera still works.
@@ -376,32 +377,59 @@ function refreshSuggestions() {
   }, 250);   // wait a moment so we don't fire on every single letter
 }
 
+// ---------- SELECTION COUNTER ----------
+// Counts every pointer selection for the current sentence, and compares it
+// with spelling the sentence letter by letter (see selection_stats.js).
+// Each sentence gets a random id so the log counts it once, even if it is
+// spoken twice or with "Compare both".
+let selectionCount = 0;
+let utteranceId = crypto.randomUUID();
+
+function updateSelectionStats() {
+  const el = document.getElementById("selectionStats");
+  const s = selectionSavings(selectionCount, composedText);
+  if (!s.letterByLetter) {
+    el.textContent = `Selections used: ${selectionCount}`;
+    return;
+  }
+  el.textContent =
+    `Selections used: ${s.selections} · letter by letter: ${s.letterByLetter} ` +
+    `(${s.letters} letters + ${s.spaces} spaces) · saved by prediction: ${s.savedPct}%`;
+}
+
 // ---------- TEXT ----------
 function selectCell(cellIndex) {
   // suggestion bar
   if (cellIndex >= 1000) {
     const picked = suggestions[cellIndex - 1000];
     if (!picked) return;
+    selectionCount++;
     composedText = picked.toUpperCase() + " ";
     composedTextEl.textContent = composedText;
+    updateSelectionStats();
     refreshSuggestions();
     return;
   }
 
   const label = GRID_LETTERS[cellIndex];
   if (!label || label === "_") return;
+  selectionCount++;
 
   if (label === "SPACE") composedText += " ";
   else if (label === "DEL") composedText = composedText.slice(0, -1);
   else composedText += label;
 
   composedTextEl.textContent = composedText || "\u00A0";
+  updateSelectionStats();
   refreshSuggestions();
 }
 
 document.getElementById("clearBtn").onclick = () => {
   composedText = "";
   composedTextEl.textContent = "\u00A0";
+  selectionCount = 0;                     // new sentence: start counting again
+  utteranceId = crypto.randomUUID();
+  updateSelectionStats();
   refreshSuggestions();
 };
 
@@ -706,6 +734,8 @@ async function requestSpeech(engine, text, emotion) {
   formData.append("emotion", emotion);
   formData.append("engine", engine);
   if (activeProfile) formData.append("profile_id", activeProfile.id);
+  formData.append("selections", selectionCount);    // for the generation log
+  formData.append("utterance_id", utteranceId);
 
   const start = performance.now();
   const res = await fetch("/speak", { method: "POST", body: formData });
@@ -1103,3 +1133,4 @@ document.addEventListener("keydown", (e) => {
 // ---------- START ----------
 // Runs last, so everything above is defined before we load the users.
 loadProfiles();
+updateSelectionStats();

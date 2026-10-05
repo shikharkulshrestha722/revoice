@@ -45,6 +45,12 @@ h1 { margin-bottom: 0; }
   height: 100%;
 }
 
+.selection-stats {
+  font-size: 13px;
+  color: #0a5c3b;
+  margin: -4px 0 8px;
+}
+
 .composed-box {
   min-height: 60px;
   border: 1px solid #ccc;
