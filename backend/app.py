@@ -127,8 +127,11 @@ def prepare_text_for_speech(text: str, emotion: str = "neutral") -> str:
     return text
 
 
+# NOTE: endpoints that wait for Colab or Gemini are plain "def", not "async def".
+# FastAPI then runs each one on its own worker thread, so a 30-second speech
+# generation doesn't freeze everything else (like the prediction bar).
 @app.post("/predict")
-async def predict(text: str = Form("")):
+def predict(text: str = Form("")):
     """Suggests 3 likely sentences based on what has been typed so far."""
     key_is_set = bool(GEMINI_API_KEY) and not GEMINI_API_KEY.startswith("PASTE_")
     result = get_suggestions(text, call_gemini=call_gemini if key_is_set else None)
@@ -196,7 +199,7 @@ async def select_profile(profile_id: str):
 
 
 @app.delete("/profiles/{profile_id}")
-async def delete_profile(profile_id: str):
+def delete_profile(profile_id: str):
     """
     Deletes a user and ALL their recordings from disk.
     Also asks Colab to forget any voice it built from their clips
@@ -213,7 +216,7 @@ async def delete_profile(profile_id: str):
 
 
 @app.get("/stock_speakers")
-async def stock_speakers():
+def stock_speakers():
     """Built-in XTTS voices, for patients who have no healthy voice left to bank."""
     try:
         r = call_colab("get", "/speakers", timeout=8)
@@ -320,7 +323,7 @@ SUPPORTED_ENGINES = ("xtts", "f5")
 
 
 @app.post("/speak")
-async def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("xtts"),
+def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("xtts"),
                 profile_id: str = Form(""), selections: str = Form(""), utterance_id: str = Form("")):
     """
     Generates speech (see generate_speech below) and writes one line to
