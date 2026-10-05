@@ -25,9 +25,13 @@ revoice/
 1. Upload `colab/revoice_server_v2.ipynb` to https://colab.research.google.com
 2. **Runtime → Change runtime type → T4 GPU**
 3. Run Step 1 and Step 2 (install). Then **Runtime → Restart session**.
-4. Run Step 2b (version check), Step 3, Step 3b, Step 4.
-5. Paste your ngrok token (https://dashboard.ngrok.com/get-started/your-authtoken) in Step 5.
-6. Run Step 6. The last line must say **ReVoice API v5**.
+4. Run Step 2b (version check — it stops with a clear message if a version is wrong),
+   Step 3, Step 3b (also downloads Whisper), Step 4 and **Step 4a** (voice functions).
+5. Optional: **Step 4b** — upload a recording and hear XTTS/F5 clone it with the exact
+   API code. Gibberish here too = install problem; fine here but bad in the app = the
+   app's reference clips are the problem.
+6. Paste your ngrok token (https://dashboard.ngrok.com/get-started/your-authtoken) in Step 5.
+7. Run Step 6. The last line must say **ReVoice API v6**.
 
 Our free ngrok domain is static, so the URL stays the same every session:
 `https://handcart-retrieval-mulch.ngrok-free.dev`
@@ -106,7 +110,10 @@ node --test "frontend/tests/*.test.mjs"
   Fine for a prototype; a real product would encrypt them.
 - **Laser detection needs decent lighting and a bright red dot** — red clothing or very
   bright rooms can confuse simple colour thresholding.
-- **Colab free tier disconnects** after inactivity; re-run Steps 3, 3b and 6.
+- **Colab free tier disconnects** after inactivity; re-run Steps 3, 3b, 4a, 5 and 6.
+- **F5-TTS uses one reference clip** (the longest, trimmed to 12 s or less at a pause) plus a
+  Whisper transcript of it, shown under the F5 player. If the transcript is wrong, F5's
+  output suffers: re-record that clip more clearly.
 
 ## Licences
 - **F5-TTS model weights are released for non-commercial use only** (fine for a college

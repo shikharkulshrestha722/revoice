@@ -116,6 +116,13 @@ select {
   width: 100%;
 }
 
+.ref-text {
+  font-size: 12px;
+  font-style: italic;
+  color: #555;
+  margin: 4px 0 0;
+}
+
 .compare-time {
   color: #555;
   font-size: 13px;

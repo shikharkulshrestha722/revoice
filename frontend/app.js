@@ -726,8 +726,24 @@ document.getElementById("recordBtn").onclick = async () => {
 const ENGINE_NAMES = { xtts: "XTTS-v2", f5: "F5-TTS" };
 let speaking = false;   // stops a second click starting another generation
 
+// Empties a player, so if the next request fails nobody mistakes the
+// PREVIOUS sentence's audio for the new one.
+function clearPlayer(audio) {
+  audio.pause();
+  audio.removeAttribute("src");
+  audio.load();                 // makes the browser actually drop the old audio
+}
+
+// F5 copies the voice from one reference clip plus a transcript of it (made by
+// Whisper on Colab). Showing the transcript lets you spot a bad reference:
+// if it doesn't match what was said, re-record the clip.
+function showRefText(el, refText) {
+  el.hidden = !refText;
+  el.textContent = refText ? `F5 heard the reference recording as: "${refText}"` : "";
+}
+
 // Asks the backend for speech from ONE engine.
-// Returns { audioSrc, seconds } or throws an Error with a readable message.
+// Returns { audioSrc, seconds, refText } or throws an Error with a readable message.
 async function requestSpeech(engine, text, emotion) {
   const formData = new FormData();
   formData.append("text", text);
@@ -745,7 +761,7 @@ async function requestSpeech(engine, text, emotion) {
   try { data = await res.json(); } catch { data = {}; }
   if (!res.ok) throw new Error(data.error || `server returned ${res.status}`);
 
-  return { audioSrc: "data:audio/wav;base64," + data.audio_base64, seconds };
+  return { audioSrc: "data:audio/wav;base64," + data.audio_base64, seconds, refText: data.ref_text || "" };
 }
 
 document.getElementById("speakBtn").onclick = async () => {
@@ -768,11 +784,15 @@ document.getElementById("speakBtn").onclick = async () => {
       // --- one engine, one player ---
       compareBox.hidden = true;
       singleAudio.hidden = false;
+      const refTextEl = document.getElementById("refTextSingle");
+      clearPlayer(singleAudio);
+      showRefText(refTextEl, "");
       statusEl.textContent = `Generating speech with ${ENGINE_NAMES[engine]}...`;
       try {
-        const { audioSrc, seconds } = await requestSpeech(engine, text, emotion);
+        const { audioSrc, seconds, refText } = await requestSpeech(engine, text, emotion);
         singleAudio.src = audioSrc;
         singleAudio.play();
+        showRefText(refTextEl, refText);
         statusEl.textContent = `Done in ${seconds.toFixed(1)}s (${ENGINE_NAMES[engine]}).`;
       } catch (err) {
         statusEl.textContent = "Error: " + err.message;
@@ -783,6 +803,7 @@ document.getElementById("speakBtn").onclick = async () => {
     // --- "Compare both": XTTS first, THEN F5 ---
     // One after the other, not at the same time: both models share one Colab GPU,
     // so running them together would make both slower and the timings unfair.
+    clearPlayer(singleAudio);
     singleAudio.hidden = true;
     compareBox.hidden = false;
     const players = {
@@ -790,18 +811,21 @@ document.getElementById("speakBtn").onclick = async () => {
       f5:   { audio: document.getElementById("audioF5"),   time: document.getElementById("timeF5") },
     };
     for (const p of Object.values(players)) {
-      p.audio.removeAttribute("src");
+      clearPlayer(p.audio);
       p.time.textContent = "waiting...";
     }
+    const refTextF5 = document.getElementById("refTextF5");
+    showRefText(refTextF5, "");
 
     const report = [];
     for (const eng of ["xtts", "f5"]) {
       statusEl.textContent = `Generating with ${ENGINE_NAMES[eng]}...`;
       players[eng].time.textContent = "generating...";
       try {
-        const { audioSrc, seconds } = await requestSpeech(eng, text, emotion);
+        const { audioSrc, seconds, refText } = await requestSpeech(eng, text, emotion);
         players[eng].audio.src = audioSrc;
         players[eng].time.textContent = `took ${seconds.toFixed(1)}s`;
+        if (eng === "f5") showRefText(refTextF5, refText);
         report.push(`${ENGINE_NAMES[eng]} ${seconds.toFixed(1)}s`);
       } catch (err) {
         // one engine failing shouldn't stop the other from being tried
