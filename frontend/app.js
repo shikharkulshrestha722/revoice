@@ -271,12 +271,49 @@ function getRawPoint(now) {
 }
 
 // ---------- DRAWING ----------
+// Colours come from the CSS theme variables (--canvas-* in style.css), so the
+// overlay matches light/dark mode. They're read ONCE here and again only when the
+// theme changes -- never inside the frame loop, which must stay fast.
+const overlayColors = {};
+const OVERLAY_FONT = '"Atkinson Hyperlegible", "Segoe UI", Arial, sans-serif';
+const labelChipWidths = {};      // label -> chip width (measured once)
+// the nicer font may finish loading after the first frames: measure again then
+document.fonts?.ready.then(() => { for (const k in labelChipWidths) delete labelChipWidths[k]; });
+
+function readOverlayColors() {
+  const css = getComputedStyle(document.documentElement);
+  const v = (name) => css.getPropertyValue(name).trim();
+  Object.assign(overlayColors, {
+    chip: v("--canvas-chip"), chipText: v("--canvas-chip-text"), bar: v("--canvas-bar"),
+    grid: v("--canvas-grid"), gridOutline: v("--canvas-grid-outline"), active: v("--canvas-active"),
+    pointer: v("--canvas-pointer"), flash: v("--canvas-flash"), mutedText: v("--canvas-muted-text"),
+    success: v("--success"), warning: v("--warning"),
+    waveKept: v("--accent"), waveCut: v("--border-strong"),
+  });
+}
+readOverlayColors();
+document.addEventListener("revoice-themechange", () => {
+  readOverlayColors();
+  // upload waveforms are drawn once (not every frame), so redraw them in the new colours
+  for (const item of upload.items) if (item.peaks) drawWaveform(item);
+});
+
+// a thin grid line that shows up over bright AND dark video: dark outline, light line
+function strokeCell(x, y, w, h) {
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = overlayColors.gridOutline;
+  ctx.strokeRect(x, y, w, h);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = overlayColors.grid;
+  ctx.strokeRect(x, y, w, h);
+}
+
 function drawGrid(activeCell) {
   const barH = SETTINGS.suggestionBarHeight;
   const cellW = overlay.width / GRID_COLS;
   const cellH = (overlay.height - barH) / GRID_ROWS;
 
-  ctx.font = "bold 18px Arial";
+  ctx.font = `bold 20px ${OVERLAY_FONT}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
@@ -287,35 +324,43 @@ function drawGrid(activeCell) {
       const label = GRID_LETTERS[idx];
 
       if (idx === activeCell && label !== "_") {
-        ctx.fillStyle = "rgba(0, 200, 120, 0.35)";
+        ctx.fillStyle = overlayColors.active;
         ctx.fillRect(x, y, cellW, cellH);
       }
 
-      ctx.strokeStyle = "rgba(255,255,255,0.5)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x, y, cellW, cellH);
+      strokeCell(x, y, cellW, cellH);
 
       if (label && label !== "_") {
-        ctx.fillStyle = "rgba(0,0,0,0.45)";
-        ctx.fillRect(x + cellW / 2 - 30, y + cellH / 2 - 13, 60, 26);
-        ctx.fillStyle = "white";
-        ctx.fillText(label, x + cellW / 2, y + cellH / 2);
+        // solid "chip" behind the letter: readable over any camera background.
+        // Chip width fits the label (SPACE/DEL are wider); measured once, then cached.
+        const chipW = labelChipWidths[label] ??= Math.max(64, ctx.measureText(label).width + 20);
+        ctx.fillStyle = overlayColors.chip;
+        ctx.fillRect(x + cellW / 2 - chipW / 2, y + cellH / 2 - 15, chipW, 30);
+        ctx.fillStyle = overlayColors.chipText;
+        ctx.fillText(label, x + cellW / 2, y + cellH / 2 + 1);
       }
     }
   }
 }
 
 function drawPointer(p, progress) {
-  // pointer dot
+  // pointer dot, with a dark edge so it shows over bright video too
   ctx.beginPath();
   ctx.arc(p.x, p.y, 7, 0, 2 * Math.PI);
-  ctx.fillStyle = "lime";
+  ctx.fillStyle = overlayColors.pointer;
   ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = overlayColors.gridOutline;
+  ctx.stroke();
 
-  // dwell progress ring: fills up as you hold still
+  // dwell progress ring: fills up as you hold still (dark track underneath for contrast)
+  const end = -Math.PI / 2 + progress * 2 * Math.PI;
   ctx.beginPath();
-  ctx.arc(p.x, p.y, 18, -Math.PI / 2, -Math.PI / 2 + progress * 2 * Math.PI);
-  ctx.strokeStyle = "lime";
+  ctx.arc(p.x, p.y, 18, -Math.PI / 2, end);
+  ctx.strokeStyle = overlayColors.gridOutline;
+  ctx.lineWidth = 7;
+  ctx.stroke();
+  ctx.strokeStyle = overlayColors.pointer;
   ctx.lineWidth = 4;
   ctx.stroke();
 }
@@ -342,10 +387,10 @@ function drawSuggestionBar(activeCell) {
   const barH = SETTINGS.suggestionBarHeight;
   const w = overlay.width / n;
 
-  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fillStyle = overlayColors.bar;
   ctx.fillRect(0, 0, overlay.width, barH);
 
-  ctx.font = "bold 15px Arial";
+  ctx.font = `bold 16px ${OVERLAY_FONT}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
@@ -355,16 +400,14 @@ function drawSuggestionBar(activeCell) {
     const text = suggestions[i] || "...";
 
     if (isActive) {
-      ctx.fillStyle = "rgba(0, 200, 120, 0.45)";
+      ctx.fillStyle = overlayColors.active;
       ctx.fillRect(x, 0, w, barH);
     }
 
-    ctx.strokeStyle = "rgba(255,255,255,0.5)";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x, 0, w, barH);
+    strokeCell(x, 0, w, barH);
 
     // wrap long phrases onto two lines
-    ctx.fillStyle = suggestions[i] ? "white" : "rgba(255,255,255,0.4)";
+    ctx.fillStyle = suggestions[i] ? overlayColors.chipText : overlayColors.mutedText;
     const words = text.split(" ");
     let line = "", lines = [];
     for (const word of words) {
@@ -381,9 +424,9 @@ function drawSuggestionBar(activeCell) {
 
   // small label showing whether predictions came from Gemini or the offline list
   if (suggestionSource) {
-    ctx.font = "10px Arial";
+    ctx.font = `bold 11px ${OVERLAY_FONT}`;
     ctx.textAlign = "left";
-    ctx.fillStyle = suggestionSource === "gemini" ? "#8f8" : "#fc8";
+    ctx.fillStyle = suggestionSource === "gemini" ? overlayColors.success : overlayColors.warning;
     ctx.fillText(suggestionSource === "gemini" ? "AI predictions" : "offline predictions", 6, barH - 7);
   }
 }
@@ -1375,15 +1418,15 @@ function drawWaveform(item) {
   for (let px = 0; px < W; px++) {
     const t = (px / W) * item.duration;
     const [min, max] = item.peaks[px];
-    g.fillStyle = t >= item.start && t <= item.end ? "#0a7a4f" : "#bbb";
+    g.fillStyle = t >= item.start && t <= item.end ? overlayColors.waveKept : overlayColors.waveCut;
     g.fillRect(px, H / 2 - max * H / 2, 1, Math.max(1, (max - min) * H / 2));
   }
-  g.fillStyle = "rgba(0,0,0,0.06)";
+  g.fillStyle = "rgba(128, 128, 128, 0.12)";       // shade the parts that will be cut
   g.fillRect(0, 0, x(item.start), H);
   g.fillRect(x(item.end), 0, W - x(item.end), H);
   // the two handles
   for (const t of [item.start, item.end]) {
-    g.fillStyle = "#0a7a4f";
+    g.fillStyle = overlayColors.waveKept;
     g.fillRect(x(t) - 2, 0, 4, H);
     g.fillRect(x(t) - 7, H / 2 - 12, 14, 24);
   }
