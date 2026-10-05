@@ -74,18 +74,26 @@ backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select
             tests/       pytest; Colab + Gemini always mocked, real network calls fail;
                          each test gets a temporary data folder (never touches backend/data)
             data/        user data (gitignored). Override location with REVOICE_DATA_DIR.
-colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice API v5":
+colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice API v6":
                                       /synthesize with clips or stock_speaker, /speakers,
-                                      /forget_voices). Only Step 6 holds the API code.
+                                      /forget_voices). Step 4a = voice functions
+                                      (synthesize_core), shared by the Step 4b self-test and
+                                      the Step 6 API. F5: up to 15s ref, F5's own
+                                      preprocess_ref_audio_text trims + transcribes (so the
+                                      transcript matches), speed 1.0, nfe_step 64, returns
+                                      ref_text. Checked against f5-tts 1.1.22 source.
             archive/                  old notebooks — never run them (they broke things)
 ```
 
 ## Hard-won constraints (do NOT change)
 - Colab runs Python 3.13. coqui-tts 0.27.5 needs transformers >=4.57, but transformers 5.x
   removed `isin_mps_friendly`. Install order must stay:
-  coqui-tts → f5-tts with `--no-deps` → its deps → LAST:
-  `pip install --no-deps --force-reinstall "transformers>=4.57,<5"` and `"numpy<2.3"`,
-  then Runtime → Restart session.
+  coqui-tts → f5-tts with `--no-deps` → its deps → ffmpeg → ONE final pinning line, LAST:
+  `pip install -q tomli transformers_stream_generator boto3 bitsandbytes "transformers==4.57.6" "huggingface-hub>=0.34.0,<1.0" "tokenizers>=0.22.0,<=0.23.0" "numpy<2.3"`
+  then `pip check` filtered to transformers|coqui|tts|f5|librosa|numba|torch|cached
+  (diffusers/gradio conflicts are expected and ignored — unused), then Runtime → Restart session.
+  **Known-working set:** transformers 4.57.6, huggingface-hub >=0.34.0,<1.0,
+  tokenizers 0.22.0–0.23.0, numpy <2.3 (Step 2b checks all four).
   **Never use a plain `--force-reinstall`** (it upgraded numpy and broke librosa/numba).
 - Set `COQUI_TOS_AGREED=1` before loading XTTS.
 - Browser audio is webm/opus; Colab converts it with ffmpeg. Keep that.
