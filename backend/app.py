@@ -46,6 +46,25 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 app = FastAPI()
 
 
+def call_colab(method: str, path: str, **kwargs):
+    """
+    Sends a request to the Colab voice server (through ngrok).
+    If the CONNECTION fails (dropped connection, SSL hiccup on the tunnel) we wait
+    a second and try ONE more time. We do NOT retry when Colab replies with an
+    error (e.g. HTTP 500) or takes too long to answer: it would fail the same way,
+    or do the same slow work twice on the GPU.
+    """
+    send = requests.post if method == "post" else requests.get
+    url = f"{COLAB_API_URL.rstrip('/')}{path}"
+    headers = {"ngrok-skip-browser-warning": "true"}   # skips ngrok's free-tier warning page
+    try:
+        return send(url, headers=headers, **kwargs)
+    except requests.exceptions.ConnectionError as e:   # SSL errors are connection errors too
+        print(f"[colab] {path}: connection problem ({type(e).__name__}), retrying once...")
+        time.sleep(1)
+        return send(url, headers=headers, **kwargs)
+
+
 # ------------------------------------------------------------
 # NO-CACHE for the webpage files.
 # Without this the browser sometimes keeps running an OLD app.js
@@ -186,11 +205,7 @@ async def delete_profile(profile_id: str):
     store.delete(profile_id)
     print(f"[profiles] deleted {profile_id}")
     try:
-        r = requests.post(
-            f"{COLAB_API_URL.rstrip('/')}/forget_voices",
-            headers={"ngrok-skip-browser-warning": "true"},
-            timeout=10,
-        )
+        r = call_colab("post", "/forget_voices", timeout=10)
         colab_cleared = r.status_code == 200
     except requests.exceptions.RequestException:
         colab_cleared = False
@@ -201,11 +216,7 @@ async def delete_profile(profile_id: str):
 async def stock_speakers():
     """Built-in XTTS voices, for patients who have no healthy voice left to bank."""
     try:
-        r = requests.get(
-            f"{COLAB_API_URL.rstrip('/')}/speakers",
-            headers={"ngrok-skip-browser-warning": "true"},
-            timeout=8,
-        )
+        r = call_colab("get", "/speakers", timeout=8)
         r.raise_for_status()
         speakers = r.json().get("speakers") or []
         if speakers:
@@ -387,12 +398,8 @@ def generate_speech(text, emotion, engine, profile_id, info):
 
     start = time.perf_counter()
     try:
-        response = requests.post(
-            f"{COLAB_API_URL.rstrip('/')}/synthesize",
-            json=payload,
-            headers={"ngrok-skip-browser-warning": "true"},  # skips ngrok's free-tier warning page
-            timeout=120,  # first generation on Colab can take 20-30 seconds
-        )
+        # first generation on Colab can take 20-30 seconds
+        response = call_colab("post", "/synthesize", json=payload, timeout=120)
     except requests.exceptions.RequestException as e:
         info["seconds"] = time.perf_counter() - start
         return JSONResponse({"error": f"Could not reach Colab API: {e}"}, status_code=502)

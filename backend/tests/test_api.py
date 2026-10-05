@@ -220,3 +220,65 @@ def test_frontend_files_are_not_cached(path):
 def test_api_replies_are_not_given_the_no_cache_header():
     r = client.get("/voice_bank")
     assert "cache-control" not in r.headers
+
+
+# ---------- retry once on connection problems ----------
+
+def sequence_post(monkeypatch, outcomes):
+    """Fake Colab that gives each outcome in turn (an exception, or a reply)."""
+    calls = []
+
+    def fake_post(url, **kw):
+        calls.append(url)
+        outcome = outcomes[len(calls) - 1]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(backend.requests, "post", fake_post)
+    monkeypatch.setattr(backend, "COLAB_API_URL", "https://colab.test")
+    return calls
+
+
+@pytest.mark.parametrize("error", [
+    requests.exceptions.ConnectionError("connection reset"),
+    requests.exceptions.SSLError("EOF occurred in violation of protocol"),
+])
+def test_speak_retries_once_after_connection_or_ssl_error(monkeypatch, error):
+    calls = sequence_post(monkeypatch, [error, FakeResponse(200, {"audio_base64": "ok"})])
+    upload("neutral")
+    r = client.post("/speak", data={"text": "HELLO", "emotion": "neutral"})
+    assert r.status_code == 200 and r.json()["audio_base64"] == "ok"
+    assert len(calls) == 2
+
+
+def test_speak_gives_up_after_second_connection_error(monkeypatch):
+    err = requests.exceptions.ConnectionError("down")
+    calls = sequence_post(monkeypatch, [err, err])
+    upload("neutral")
+    r = client.post("/speak", data={"text": "HELLO", "emotion": "neutral"})
+    assert r.status_code == 502 and "Could not reach Colab" in r.json()["error"]
+    assert len(calls) == 2                      # exactly one retry, not more
+
+
+def test_colab_error_reply_is_not_retried(monkeypatch):
+    calls = sequence_post(monkeypatch, [FakeResponse(500, {"error": "CUDA out of memory"})])
+    upload("neutral")
+    r = client.post("/speak", data={"text": "HELLO", "emotion": "neutral"})
+    assert r.status_code == 502
+    assert len(calls) == 1
+
+
+def test_read_timeout_is_not_retried(monkeypatch):
+    # Colab may still be generating: retrying would do the slow work twice
+    calls = sequence_post(monkeypatch, [requests.exceptions.ReadTimeout("too slow")])
+    upload("neutral")
+    assert client.post("/speak", data={"text": "HELLO", "emotion": "neutral"}).status_code == 502
+    assert len(calls) == 1
+
+
+def test_speak_forwards_f5_reference_transcript(fake_colab):
+    fake_colab["reply"] = FakeResponse(200, {"audio_base64": "x", "ref_text": "Hello, this is me."})
+    upload("neutral")
+    r = client.post("/speak", data={"text": "HELLO", "emotion": "neutral", "engine": "f5"})
+    assert r.json() == {"audio_base64": "x", "ref_text": "Hello, this is me."}

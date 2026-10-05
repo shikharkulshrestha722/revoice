@@ -20,6 +20,8 @@ def no_real_network(monkeypatch):
         raise AssertionError(f"Test tried a REAL network call to {args[0] if args else kwargs}")
     monkeypatch.setattr(backend.requests, "post", refuse)
     monkeypatch.setattr(backend.requests, "get", refuse)
+    # the Colab retry waits 1 second before trying again; skip that wait in tests
+    monkeypatch.setattr(backend.time, "sleep", lambda seconds: None)
 
 
 @pytest.fixture(autouse=True)
