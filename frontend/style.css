@@ -394,6 +394,8 @@ audio {
   line-height: 1.6;
 }
 
+.metrics div { white-space: pre-wrap; }   /* keeps the indent of the accent lines */
+
 .compare-item.winner {
   border: 2px solid var(--accent);
   background: var(--accent-soft);

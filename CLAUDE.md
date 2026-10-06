@@ -95,6 +95,11 @@ backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select
             parity_check.py      FILE [--profile ID] [--runs N]: same bytes via the Step 4b
                          request vs generate_speech() (throwaway user in a temp folder), prints
                          both similarities + md5 of what was sent. F5 varies about +-0.03 per run.
+            accent.py    judge_accent (>=3 s speech, else too_short; confidence from top1-top2
+                         margin: <0.05 low, <0.15 medium, else high), compare_accents (only
+                         when both sides ok AND >= medium). SAME rules in metrics_format.js
+                         (judgeAccent/compareAccents/accentLines). Log: ref/out_accent_scores.
+                         Page hides accents unless "Show accent estimates" (localStorage).
             dataset_export.py    LJSpeech zip: metadata.csv `id|text|text`, no header, "
 "
                          endings; wavs/ (22050 mono) if ffmpeg on PATH, else raw/ webm
@@ -115,7 +120,10 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
                                       (spkrec-ecapa-voxceleb, accent-id-commonaccent_ecapa);
                                       synthesize_core returns synth_seconds + metrics
                                       {similarity, reference/output {pitch_hz, pitch_range_hz,
-                                      words_per_sec, accent, accent_conf}, accent_match};
+                                      words_per_sec, speech_seconds, accent_scores}, accent_match};
+                                      v8: accent_scores = top-3 [[label, RAW cosine -1..1]],
+                                      NO x30+softmax percentages (unconfirmed scale, showed
+                                      "US 100%"); accent_match stays None on Colab.
                                       every metric is None on failure. speechbrain 1.1.1 is
                                       installed --no-deps before the final pin line. Audio is
                                       loaded with librosa at 16 kHz (no torchaudio file IO).

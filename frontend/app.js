@@ -938,10 +938,21 @@ function showRefText(el, refText) {
   el.textContent = refText ? `F5 heard the reference recording as: "${refText}"` : "";
 }
 
+// "Show accent estimates" (caregiver setting, remembered in this browser; off by default
+// because the accent classifier is rough on short sentences).
+const SHOW_ACCENT_KEY = "revoice.showAccent";
+const showAccentEl = document.getElementById("showAccent");
+try { showAccentEl.checked = localStorage.getItem(SHOW_ACCENT_KEY) === "yes"; } catch { /* stays hidden */ }
+showAccentEl.onchange = () => {
+  try { localStorage.setItem(SHOW_ACCENT_KEY, showAccentEl.checked ? "yes" : "no"); } catch { /* not saved */ }
+  for (const el of document.querySelectorAll(".metrics")) showMetrics(el, el.metricsData);   // redraw results on screen
+};
+
 // Voice metrics measured on Colab (similarity, pitch, rate, accent), one line each.
 // Shows nothing if there are none (e.g. metrics switched off on Colab).
 function showMetrics(el, metrics) {
-  const lines = metricsLines(metrics);
+  el.metricsData = metrics;            // kept so the accent setting can redraw it
+  const lines = metricsLines(metrics, { showAccent: showAccentEl.checked });
   el.replaceChildren(...lines.map((line) => {
     const div = document.createElement("div");
     div.textContent = line;

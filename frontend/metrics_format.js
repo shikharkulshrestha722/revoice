@@ -6,7 +6,8 @@
 //   similarity : how close the output voice is to the real voice (1 = identical)
 //   pitch      : average pitch in Hz, and its range
 //   rate       : words per second of actual speech
-//   accent     : best-guess English accent + confidence (an ESTIMATE)
+//   accent     : the 3 most likely English accents with RAW scores (-1..1, NOT %)
+//                + seconds of speech; read with the rules below (same as backend/accent.py)
 // Any of these can be null (not measured); we then show "n/a".
 // ============================================================
 
@@ -23,10 +24,57 @@ export function accentName(label) {
   return label ? (ACCENT_NAMES[label] || label) : "n/a";
 }
 
-function accentText(stats) {
-  if (!stats || !stats.accent) return "n/a";
-  const pct = isNum(stats.accent_conf) ? ` ${Math.round(stats.accent_conf * 100)}%` : "";
-  return `${accentName(stats.accent)}${pct}`;
+// ---- reading the accent estimate (SAME rules as backend/accent.py) ----
+// Under 3 s of speech: too short to say. Confidence = how far the top score is ahead
+// of the second (under 0.05 low, under 0.15 medium, else high). These are judgement
+// calls from our own clips, not calibrated probabilities, so no percentages are shown.
+export const MIN_ACCENT_SPEECH_SECONDS = 3.0;
+export const LOW_MARGIN = 0.05;
+export const HIGH_MARGIN = 0.15;
+
+export function judgeAccent(stats) {
+  const scores = stats?.accent_scores;
+  if (!Array.isArray(scores) || scores.length === 0) {
+    return stats?.accent ? { status: "old_notebook", label: stats.accent } : { status: "not_measured" };
+  }
+  const top = scores.slice(0, 3).map(([label, score]) => [String(label), Number(score)]);
+  const speech = stats.speech_seconds;
+  if (isNum(speech) && speech < MIN_ACCENT_SPEECH_SECONDS) return { status: "too_short", speechSeconds: speech, top };
+  const margin = top.length > 1 ? Math.round((top[0][1] - top[1][1]) * 1000) / 1000 : null;
+  const confidence = margin === null || margin < LOW_MARGIN ? "low" : margin < HIGH_MARGIN ? "medium" : "high";
+  return { status: "ok", label: top[0][0], top, margin, confidence, speechSeconds: speech };
+}
+
+// Same accent as the real voice? match: true/false, or null + reason when it can't be judged fairly
+export function compareAccents(ref, out) {
+  const problem = (j, who) =>
+    j.status === "too_short" ? `${who} too short` : j.status !== "ok" ? `${who} not measured`
+    : j.confidence === "low" ? `${who} accent unclear` : null;
+  const reason = problem(ref, "reference") || problem(out, "output");
+  return reason ? { match: null, reason } : { match: ref.label === out.label, reason: "" };
+}
+
+function accentText(j) {
+  if (j.status === "not_measured") return "not measured";
+  if (j.status === "old_notebook") return `${accentName(j.label)} (old Colab notebook: re-run Step 4a for scores)`;
+  if (j.status === "too_short") return `n/a (too short: ${j.speechSeconds.toFixed(1)} s of speech)`;
+  const scores = j.top.map(([label, score]) => `${accentName(label)} ${score.toFixed(2)}`).join(" · ");
+  return `${scores} (${j.confidence} confidence)`;
+}
+
+// The accent lines under a player (only when "Show accent estimates" is ticked)
+export function accentLines(metrics) {
+  const out = judgeAccent(metrics.output);
+  if (!metrics.reference) return [`Accent (estimate): output ${accentText(out)}`];   // stock voice
+  const ref = judgeAccent(metrics.reference);
+  const lines = ["Accent (estimate, raw scores -1 to 1, not %):",
+                 `  real voice: ${accentText(ref)}`, `  output: ${accentText(out)}`];
+  if (ref.status === "old_notebook" || out.status === "old_notebook") return lines;
+  const { match, reason } = compareAccents(ref, out);
+  lines.push(match === true ? "  → same accent kept"
+    : match === false ? `  → accent changed: ${accentName(ref.label)} → ${accentName(out.label)}`
+    : `  → change not judged (${reason})`);
+  return lines;
 }
 
 function pitchText(stats) {
@@ -46,7 +94,8 @@ export function similarityValue(metrics) {
 }
 
 // The lines shown under a player. Returns [] if there are no metrics at all.
-export function metricsLines(metrics) {
+// Accent lines only with { showAccent: true } (hidden by default: see the page setting).
+export function metricsLines(metrics, { showAccent = false } = {}) {
   if (!metrics) return [];
   const ref = metrics.reference, out = metrics.output;
   const sim = similarityValue(metrics);
@@ -55,9 +104,7 @@ export function metricsLines(metrics) {
                  : `Pitch: output ${pitchText(out)}`);
   lines.push(ref ? `Rate: ref ${rateText(ref)} → output ${rateText(out)} words/s`
                  : `Rate: output ${rateText(out)} words/s`);
-  const match = metrics.accent_match === true ? " (same)" : metrics.accent_match === false ? " (different)" : "";
-  lines.push(ref ? `Accent (estimated): ref ${accentText(ref)} → output ${accentText(out)}${match}`
-                 : `Accent (estimated): output ${accentText(out)}`);
+  if (showAccent) lines.push(...accentLines(metrics));
   return lines;
 }
 

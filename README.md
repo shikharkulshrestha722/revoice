@@ -33,7 +33,7 @@ revoice/
    Step 3c loads two small models that only MEASURE results (speaker similarity and an
    English accent estimate).
 6. Paste your ngrok token (https://dashboard.ngrok.com/get-started/your-authtoken) in Step 5.
-7. Run Step 6. The last line must say **ReVoice API v7**.
+7. Run Step 6. The last line must say **ReVoice API v8**.
 
 Our free ngrok domain is static, so the URL stays the same every session:
 `https://handcart-retrieval-mulch.ngrok-free.dev`
@@ -162,13 +162,21 @@ plus what the website sends for that real user right now.
   transcript of its reference). The sentence itself is not stored.
 - **Voice metrics** (under each player, measured on Colab for every sentence):
   *similarity* to the real voice (speaker-embedding cosine, 0-1, higher = more alike),
-  average *pitch* and range, *speaking rate* (words per second of actual speech) and an
-  *estimated* English *accent* with confidence, for the real voice and the output.
-  Compare mode highlights the engine with the higher similarity. The accent model is an
-  estimate trained on 16 English accents — treat it as an indication, not a fact.
+  average *pitch* and range, *speaking rate* (words per second of actual speech), for the
+  real voice and the output. Compare mode highlights the engine with the higher similarity.
+- **Accent estimate** (hidden unless *Show accent estimates* is ticked under Speak; the
+  choice is remembered in this browser). A model trained on 16 English accents gives a
+  score from -1 to 1 for each; the page shows the **top 3 raw scores** for the real voice
+  and for the output, no percentages (the scores are not probabilities). Confidence is how
+  far the winner is ahead of second place: under 0.05 *low*, under 0.15 *medium*, else
+  *high*. Under 3 s of speech it shows *n/a (too short)*. "Accent changed" is only claimed
+  when both sides are long enough and at least medium confidence.
+  On our own recordings every clip of 7 s or more was classified **Indian**, with US
+  always second (0.03-0.22 behind); clips under 3 s flipped between Indian and US. So
+  short generated sentences can't be judged, which is what made "US 100%" appear before.
 - **Summary**: `cd backend; py -3.10 report.py` prints average generation time per engine
   and the average selections saved, plus average similarity and accent-match rate per
-  engine. The same numbers are at
+  engine (accent match counts only sentences where it could fairly be judged). The same numbers are at
   http://localhost:8000/stats/summary while the server runs.
   "Compare both" or speaking a sentence twice counts that sentence once for the savings.
 
