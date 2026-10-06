@@ -120,7 +120,7 @@ def test_speak_sends_correct_request_to_colab(fake_colab):
     assert p["engine"] == "xtts"                           # default engine
     assert p["language"] == "en"
     assert [base64.b64decode(c) for c in p["speaker_wav_base64_list"]] == [b"voice-1", b"voice-2"]
-    assert p["speaker_wav_base64"] == p["speaker_wav_base64_list"][0]
+    assert p["speaker_wav_base64"] is None and p["stock_speaker"] is None    # same fields as Step 4b
 
 
 def test_speak_forwards_f5_engine(fake_colab):

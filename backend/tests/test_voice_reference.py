@@ -174,11 +174,13 @@ def test_guided_only_uses_the_chosen_guided_takes(store, user, colab):
     store.save_guided(user["id"], "g001", b"take-1", ".webm", 3.0)
     store.save_guided(user["id"], "g002", b"take-2", ".webm", 5.0)
     store.pick_references(user["id"])
-    r = speak()
-    assert sent_clips(colab) == [b"take-2", b"take-1"]            # longest first
+    r = speak(engine="xtts")
+    assert sent_clips(colab) == [b"take-2", b"take-1"]            # longest first; XTTS uses all
     clips = r.json()["voice_reference"]["clips"]
     assert [(c["source"], c["name"], c["duration_s"]) for c in clips] == [
         ("guided_references", "g002.webm", 5.0), ("guided_references", "g001.webm", 3.0)]
+    speak(engine="f5")
+    assert sent_clips(colab) == [b"take-2"]                       # F5 copies one clip: the longest
 
 
 def test_stock_voice_ignores_the_setting(store, colab):
@@ -246,7 +248,7 @@ def test_log_records_reference_files_lengths_and_f5_transcript(store, user, cola
     add_upload(store, user, 6.0, name="voice note.ogg")
     set_mode(user, "uploads")
     colab["reply"] = {"audio_base64": "x", "ref_text": "  Hello,\nthis is me.  "}
-    speak()
+    speak(engine="xtts")
     row = log_rows()[-1]
     assert row["voice_source"] == "uploaded_recordings"
     assert row["ref_mode"] == "uploads"
@@ -267,3 +269,78 @@ def test_choose_references_error_is_a_profile_error(store, user):
     store.set_voice_reference(user["id"], "recorded")
     with pytest.raises(ProfileError):
         store.choose_references(user["id"], "neutral")
+
+
+# ================= one chosen upload, and F5 gets exactly one clip =================
+
+def test_a_specific_uploaded_clip_can_be_chosen(store, user, colab):
+    add_upload(store, user, 29.4, name="Recording (3).m4a")      # more speech: "Auto" would pick it
+    add_upload(store, user, 18.0, name="Recording (2).m4a")
+    r = client.post(f"/profiles/{user['id']}/voice_reference", data={"mode": "uploads", "clip_id": "000002"})
+    assert r.json()["reference_clip"] == "000002"
+    for engine in ("f5", "xtts"):
+        reply = speak(engine=engine).json()
+        assert [c["name"] for c in reply["voice_reference"]["clips"]] == ["Recording (2).m4a (#000002)"]
+        assert sent_clips(colab) == [(store._uploads_dir(user["id"]) / "000002.wav").read_bytes()]
+
+
+def test_choosing_a_clip_needs_uploads_mode_and_an_existing_clip(store, user):
+    add_upload(store, user)
+    r = client.post(f"/profiles/{user['id']}/voice_reference", data={"mode": "auto", "clip_id": "000001"})
+    assert r.status_code == 400
+    r = client.post(f"/profiles/{user['id']}/voice_reference", data={"mode": "uploads", "clip_id": "000009"})
+    assert r.status_code == 404
+    # choosing the mode again without a clip goes back to "all uploads"
+    client.post(f"/profiles/{user['id']}/voice_reference", data={"mode": "uploads", "clip_id": "000001"})
+    assert set_mode(user, "uploads").json()["reference_clip"] == ""
+
+
+def test_deleted_chosen_clip_is_an_error_never_another_upload(store, user, colab):
+    add_upload(store, user, 29.4, name="Recording (3).m4a")
+    add_upload(store, user, 18.0, name="Recording (2).m4a")
+    store.set_voice_reference(user["id"], "uploads", "000002")
+    client.delete(f"/uploads/000002")
+    r = speak()
+    assert r.status_code == 400 and "no longer exists" in r.json()["error"]
+    assert colab["calls"] == 0
+
+
+def test_f5_gets_one_clip_so_similarity_is_measured_on_what_it_copied(store, user, colab):
+    add_upload(store, user, 10.0, name="weak.ogg")                # speech 8 s
+    add_upload(store, user, 29.4, name="Recording (3).m4a")       # speech 23.5 s
+    set_mode(user, "uploads")
+    reply = speak(engine="f5").json()
+    assert [c["name"] for c in reply["voice_reference"]["clips"]] == ["Recording (3).m4a (#000002)"]
+    assert len(colab["payload"]["speaker_wav_base64_list"]) == 1
+    speak(engine="xtts")
+    assert len(colab["payload"]["speaker_wav_base64_list"]) == 2   # XTTS really uses them all
+
+
+def test_f5_with_recorded_clips_uses_the_longest(store, user, colab):
+    store.add_clip(user["id"], "neutral", make_webm(list(range(0, 8000, 20))))
+    long_clip = make_webm(list(range(0, 19920, 20)))
+    store.add_clip(user["id"], "neutral", long_clip)
+    speak(engine="f5")
+    assert sent_clips(colab) == [long_clip]
+
+
+def test_website_sends_the_same_fields_as_step_4b(store, user, colab):
+    from parity_check import TEST_SENTENCE
+    add_upload(store, user)
+    set_mode(user, "uploads")
+    speak(text=TEST_SENTENCE, emotion="neutral", engine="f5")
+    p = colab["payload"]
+    wav = (store._uploads_dir(user["id"]) / "000001.wav").read_bytes()
+    assert p == {"text": TEST_SENTENCE, "language": "en", "emotion": "neutral", "engine": "f5",
+                 "stock_speaker": None, "speaker_wav_base64": None,
+                 "speaker_wav_base64_list": [base64.b64encode(wav).decode()]}
+
+
+def test_preview_shows_what_each_engine_gets(store, user):
+    add_upload(store, user, 10.0, name="a.ogg")
+    add_upload(store, user, 20.0, name="b.ogg")
+    set_mode(user, "uploads")
+    f5 = client.get("/voice_bank/references", params={"engine": "f5"}).json()
+    xtts = client.get("/voice_bank/references", params={"engine": "xtts"}).json()
+    assert [c["name"] for c in f5["clips"]] == ["b.ogg (#000002)"]
+    assert len(xtts["clips"]) == 2

@@ -420,11 +420,15 @@ def generate_speech(text, emotion, engine, profile_id, info):
         # (Auto = clips recorded for this emotion > uploaded old recordings > guided takes).
         # Raises a clear error if the chosen kind has none (never a silent swap).
         mode, source, refs = store.choose_references(profile["id"], emotion)
+        refs = clips_for_engine(engine, refs)
         info["voice_source"] = source
-        info["voice_reference"] = voice_reference_info(mode, source, refs)
+        info["voice_reference"] = voice_reference_info(mode, source, refs, engine)
         clips = [base64.b64encode(r["data"]).decode("utf-8") for r in refs]
-        payload["speaker_wav_base64"] = clips[0]          # kept for older Colab notebooks
-        payload["speaker_wav_base64_list"] = clips        # all clips = better cloning
+        # exactly the fields Colab's Step 4b test sends (it has no stock voice and
+        # puts every clip in the list), so website and Step 4b results are comparable
+        payload["stock_speaker"] = None
+        payload["speaker_wav_base64"] = None
+        payload["speaker_wav_base64_list"] = clips
         sent = ", ".join(f"{r['name']} ({r['duration_s'] if r['duration_s'] is not None else '?'}s)" for r in refs)
         print(f"[speak:{engine}] {text!r} -> {spoken_text!r} using {source} [{mode}]: {sent}")
 
@@ -456,11 +460,25 @@ def generate_speech(text, emotion, engine, profile_id, info):
     return reply
 
 
-def voice_reference_info(mode, source, refs) -> dict:
+def clips_for_engine(engine, refs):
+    """F5 copies the voice from ONE clip. If we sent several, Colab would pick the longest
+    by itself AND measure similarity against all of them joined together, i.e. partly
+    against audio F5 never heard. So F5 gets just one clip: the first in our order
+    (uploads: most speech first; guided: longest first), or for recorded emotion clips
+    the longest. XTTS really uses all the clips, so it gets all of them."""
+    if engine != "f5" or len(refs) <= 1:
+        return refs
+    if refs[0]["source"] == "emotion_clips":
+        return [max(refs, key=lambda r: r["duration_s"] or 0)]      # ties: the oldest
+    return refs[:1]
+
+
+def voice_reference_info(mode, source, refs, engine="") -> dict:
     """What the page shows (and the log records) about the recordings sent to Colab."""
     return {
         "mode": mode,
         "mode_label": REFERENCE_MODES[mode],
+        "engine": engine,
         "source": source,
         "clips": [{"source": r["source"], "name": r["name"], "duration_s": r["duration_s"]} for r in refs],
         "total_seconds": round(sum(r["duration_s"] or 0 for r in refs), 2),
@@ -468,20 +486,22 @@ def voice_reference_info(mode, source, refs) -> dict:
 
 
 @app.post("/profiles/{profile_id}/voice_reference")
-async def set_voice_reference(profile_id: str, mode: str = Form(...)):
-    """Caregiver setting: which recordings to copy the voice from (see REFERENCE_MODES)."""
-    return store.set_voice_reference(profile_id, mode)
+async def set_voice_reference(profile_id: str, mode: str = Form(...), clip_id: str = Form("")):
+    """Caregiver setting: which recordings to copy the voice from (see REFERENCE_MODES);
+    with "uploads", clip_id can pick one specific uploaded clip."""
+    return store.set_voice_reference(profile_id, mode, clip_id)
 
 
 @app.get("/voice_bank/references")
-async def preview_references(emotion: str = "neutral", profile_id: str = ""):
+async def preview_references(emotion: str = "neutral", profile_id: str = "", engine: str = "f5"):
     """Which recordings the NEXT /speak would send, so the page can show it before
     generating. Returns {"error": ...} (status 200) when the setting can't be met."""
     profile = resolve_profile(profile_id)
     if profile["voice_type"] == "stock":
         return {"mode": "stock", "clips": []}
     try:
-        return voice_reference_info(*store.choose_references(profile["id"], emotion))
+        mode, source, refs = store.choose_references(profile["id"], emotion)
+        return voice_reference_info(mode, source, clips_for_engine(engine, refs), engine)
     except ProfileError as e:
         return {"mode": profile["voice_reference"], "mode_label": REFERENCE_MODES[profile["voice_reference"]],
                 "clips": [], "error": str(e)}

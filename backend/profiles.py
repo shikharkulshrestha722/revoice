@@ -214,16 +214,24 @@ class ProfileStore:
         folder = self._folder(profile_id)
         profile = json.loads((folder / "profile.json").read_text(encoding="utf-8"))
         profile.setdefault("voice_reference", "auto")     # older profiles don't have it yet
+        profile.setdefault("reference_clip", "")          # one chosen uploaded clip, "" = all uploads
         profile["clip_counts"] = self.clip_counts(profile_id)
         return profile
 
-    def set_voice_reference(self, profile_id: str, mode: str) -> dict:
-        """Which recordings /speak copies the voice from (see REFERENCE_MODES)."""
+    def set_voice_reference(self, profile_id: str, mode: str, clip_id: str = "") -> dict:
+        """Which recordings /speak copies the voice from (see REFERENCE_MODES).
+        With "uploads", clip_id picks ONE uploaded clip ("" = all uploads)."""
         if mode not in REFERENCE_MODES:
             raise ProfileError(f"Unknown voice reference '{mode}'. Use one of: {', '.join(REFERENCE_MODES)}.")
+        if clip_id:
+            if mode != "uploads":
+                raise ProfileError("A specific clip can only be chosen with 'Uploaded recordings only'.")
+            if clip_id not in [c["id"] for c in self._read_uploads(profile_id)["clips"]]:
+                raise ProfileNotFound(f"No uploaded clip '{clip_id}'.")
         path = self._folder(profile_id) / "profile.json"
         profile = json.loads(path.read_text(encoding="utf-8"))
         profile["voice_reference"] = mode
+        profile["reference_clip"] = clip_id
         path.write_text(json.dumps(profile, indent=2), encoding="utf-8")
         return self.get(profile_id)
 
@@ -314,7 +322,8 @@ class ProfileStore:
         mode = profile["voice_reference"]
         finders = {
             "recorded": ("emotion_clips", lambda: self.emotion_references(profile_id, emotion)),
-            "uploads": ("uploaded_recordings", lambda: self.upload_references(profile_id)),
+            "uploads": ("uploaded_recordings",
+                        lambda: self.upload_references(profile_id, only=profile["reference_clip"])),
             "guided": ("guided_references", lambda: self.guided_references(profile_id)),
         }
         if mode == "auto":
@@ -326,6 +335,10 @@ class ProfileStore:
                                "Record one, upload old recordings, or use guided recordings as voice references.")
         source, find = finders[mode]
         refs = find()
+        if mode == "uploads" and profile["reference_clip"] and not refs:
+            # the chosen clip was deleted: say so, never pick another upload by ourselves
+            raise ProfileError(f"The chosen uploaded clip (#{profile['reference_clip']}) no longer exists. "
+                               "Choose another clip in Voice reference.")
         if not refs:
             missing = {
                 "recorded": f"no recorded clip for the emotion '{emotion}'",
@@ -567,17 +580,23 @@ class ProfileStore:
         self._write_uploads(profile_id, manifest)
         return self.list_uploads(profile_id)
 
-    def upload_references(self, profile_id: str, target_seconds: float = 45.0, max_clips: int = 6) -> list:
+    def upload_references(self, profile_id: str, target_seconds: float = 45.0, max_clips: int = 6,
+                          only: str = "") -> list:
         """Uploaded clips to send to Colab as voice references: the ones with the most
-        speech first, until about 45 s (XTTS uses up to 30 s; F5 takes the longest clip).
-        Capped so each request through ngrok stays small."""
+        speech first, until about 45 s (XTTS uses up to 30 s; F5 gets only the first one,
+        see app.py). Capped so each request through ngrok stays small.
+        only = one clip id: just that clip (or nothing if it was deleted)."""
         clips = sorted(self._read_uploads(profile_id)["clips"], key=lambda c: c["speech_s"], reverse=True)
+        if only:
+            clips = [c for c in clips if c["id"] == only]
         out, total = [], 0.0
         for c in clips[:max_clips]:
             path = self._uploads_dir(profile_id) / f"{c['id']}.wav"
             if path.is_file():
-                out.append(self._reference("uploaded_recordings", f"{c['original_name']} (#{c['id']})",
-                                           path, c["duration_s"]))
+                ref = self._reference("uploaded_recordings", f"{c['original_name']} (#{c['id']})",
+                                      path, c["duration_s"])
+                ref["speech_s"] = c["speech_s"]
+                out.append(ref)
                 total += c["duration_s"]
             if total >= target_seconds:
                 break
