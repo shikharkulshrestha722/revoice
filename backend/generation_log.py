@@ -8,7 +8,7 @@
 #                         or speaking the same sentence twice gives several rows
 #                         with the same id; the summary counts the sentence once.
 #   engine, emotion       what was asked for
-#   voice_source          stock / emotion_clips / guided_references
+#   voice_source          stock / emotion_clips / uploaded_recordings / guided_references
 #   chars, words          length of the composed text (the text itself is NOT
 #                         saved, for privacy)
 #   selections            pointer selections the patient used for this sentence
@@ -25,6 +25,11 @@
 #   accent_match          yes if both got the same accent label
 #   ref_/out_pitch_hz     average pitch of the real voice / of the output
 #   ref_/out_words_per_sec  speaking rate of the real voice / of the output
+#   ref_mode              the Voice reference setting: auto / uploads / recorded / guided
+#   ref_files             exactly which recordings were sent, with their length, e.g.
+#                         "Recording (2).m4a (#000001) 17.99s" (several joined with " | ")
+#   ref_seconds           total length of those recordings
+#   ref_text              F5 only: the words Whisper heard in the reference it copied
 # ============================================================
 
 import csv
@@ -38,7 +43,9 @@ FIELDS = ["timestamp", "utterance_id", "engine", "emotion", "voice_source", "cha
           "selections", "letter_by_letter", "selections_saved_pct", "seconds", "success", "error",
           # voice evaluation (added later, so they come last)
           "synth_seconds", "similarity", "ref_accent", "out_accent", "accent_match",
-          "ref_pitch_hz", "out_pitch_hz", "ref_words_per_sec", "out_words_per_sec"]
+          "ref_pitch_hz", "out_pitch_hz", "ref_words_per_sec", "out_words_per_sec",
+          # which recordings the voice was copied from (added later again)
+          "ref_mode", "ref_files", "ref_seconds", "ref_text"]
 
 _lock = threading.Lock()   # two requests at once must not mix up their lines
 
@@ -81,6 +88,17 @@ def metric_columns(metrics) -> dict:
     }
 
 
+def reference_columns(voice_reference, ref_text) -> dict:
+    """The recordings sent to Colab (see app.voice_reference_info) as flat CSV columns."""
+    ref = voice_reference or {}
+    return {
+        "ref_mode": ref.get("mode", ""),
+        "ref_files": " | ".join(f"{c['name']} {_blank(c['duration_s'])}s" for c in ref.get("clips", [])),
+        "ref_seconds": _blank(ref.get("total_seconds")),
+        "ref_text": " ".join((ref_text or "").split())[:300],
+    }
+
+
 def _upgrade_old_file(path):
     """An older log may have fewer columns. Rewrite it with the current header
     (old rows keep their values, new columns stay empty) so the CSV stays valid."""
@@ -97,7 +115,7 @@ def _upgrade_old_file(path):
 
 def log_generation(path, *, text, engine, emotion, voice_source="", seconds=None,
                    success=False, error="", selections=None, utterance_id="",
-                   synth_seconds=None, metrics=None):
+                   synth_seconds=None, metrics=None, voice_reference=None, ref_text=None):
     """Appends one row to the CSV (creating it, with a header line, if needed)."""
     clean = tidy(text)
     needed = letter_by_letter_selections(clean)
@@ -117,6 +135,7 @@ def log_generation(path, *, text, engine, emotion, voice_source="", seconds=None
         "error": (error or "").replace("\n", " ")[:300],
         "synth_seconds": _blank(synth_seconds),
         **metric_columns(metrics),
+        **reference_columns(voice_reference, ref_text),
     }
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with _lock:

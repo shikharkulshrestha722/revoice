@@ -22,7 +22,7 @@ import re
 import time
 
 from predictor import get_suggestions
-from profiles import ProfileStore, ProfileError, ProfileNotFound, MAX_UPLOAD_BYTES
+from profiles import ProfileStore, ProfileError, ProfileNotFound, MAX_UPLOAD_BYTES, REFERENCE_MODES
 from guided_sentences import GUIDED_SENTENCES, SESSION_SIZE
 from dataset_export import build_dataset_zip
 from generation_log import log_generation, summarize
@@ -362,7 +362,7 @@ def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("x
     data/generation_log.csv for EVERY call, whether it worked or not.
     selections / utterance_id come from the page's selection counter.
     """
-    info = {}            # generate_speech fills in voice_source and seconds
+    info = {}            # generate_speech fills in voice_source, voice_reference and seconds
     try:
         result = generate_speech(text, emotion, engine, profile_id, info)
         error = json.loads(result.body)["error"] if isinstance(result, JSONResponse) else ""
@@ -377,6 +377,7 @@ def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("x
         selections=int(selections) if selections.strip().isdigit() else None,
         utterance_id=utterance_id[:40],
         synth_seconds=reply.get("synth_seconds"), metrics=reply.get("metrics"),
+        voice_reference=info.get("voice_reference"), ref_text=reply.get("ref_text"),
     )
     if isinstance(result, Exception):
         raise result
@@ -415,29 +416,17 @@ def generate_speech(text, emotion, engine, profile_id, info):
         info["voice_source"] = "stock"
         print(f"[speak:{engine}] {text!r} -> {spoken_text!r} with stock voice {profile['stock_speaker']!r}")
     else:
-        # Which recordings to copy the voice from, in order of preference:
-        #   1. clips recorded for this emotion
-        #   2. uploaded old recordings (for someone who has lost their voice)
-        #   3. guided recordings chosen as references
-        # (with 2 and 3 the emotion still changes speed/expressiveness on Colab)
-        raw_clips = store.get_clips(profile["id"], emotion)
-        info["voice_source"] = "emotion_clips"
-        if not raw_clips:
-            raw_clips = store.get_upload_clips(profile["id"])
-            info["voice_source"] = "uploaded_recordings"
-        if not raw_clips:
-            raw_clips = store.get_reference_clips(profile["id"])
-            info["voice_source"] = "guided_references"
-        if not raw_clips:
-            return JSONResponse(
-                {"error": f"No voice sample recorded yet for emotion '{emotion}'. "
-                          "Record one, or use guided recordings as voice references."},
-                status_code=400,
-            )
-        clips = [base64.b64encode(c).decode("utf-8") for c in raw_clips]
+        # Which recordings to copy the voice from: the user's "Voice reference" setting
+        # (Auto = clips recorded for this emotion > uploaded old recordings > guided takes).
+        # Raises a clear error if the chosen kind has none (never a silent swap).
+        mode, source, refs = store.choose_references(profile["id"], emotion)
+        info["voice_source"] = source
+        info["voice_reference"] = voice_reference_info(mode, source, refs)
+        clips = [base64.b64encode(r["data"]).decode("utf-8") for r in refs]
         payload["speaker_wav_base64"] = clips[0]          # kept for older Colab notebooks
         payload["speaker_wav_base64_list"] = clips        # all clips = better cloning
-        print(f"[speak:{engine}] {text!r} -> {spoken_text!r} using {len(clips)} clip(s) of {profile['id']}")
+        sent = ", ".join(f"{r['name']} ({r['duration_s'] if r['duration_s'] is not None else '?'}s)" for r in refs)
+        print(f"[speak:{engine}] {text!r} -> {spoken_text!r} using {source} [{mode}]: {sent}")
 
     start = time.perf_counter()
     try:
@@ -461,7 +450,41 @@ def generate_speech(text, emotion, engine, profile_id, info):
             status_code=502,
         )
 
-    return response.json()  # forwards {"audio_base64": "..."} straight to the browser
+    reply = response.json()    # {"audio_base64": "...", metrics...} goes straight to the browser,
+    if "voice_reference" in info:          # plus exactly which recordings were sent
+        reply["voice_reference"] = info["voice_reference"]
+    return reply
+
+
+def voice_reference_info(mode, source, refs) -> dict:
+    """What the page shows (and the log records) about the recordings sent to Colab."""
+    return {
+        "mode": mode,
+        "mode_label": REFERENCE_MODES[mode],
+        "source": source,
+        "clips": [{"source": r["source"], "name": r["name"], "duration_s": r["duration_s"]} for r in refs],
+        "total_seconds": round(sum(r["duration_s"] or 0 for r in refs), 2),
+    }
+
+
+@app.post("/profiles/{profile_id}/voice_reference")
+async def set_voice_reference(profile_id: str, mode: str = Form(...)):
+    """Caregiver setting: which recordings to copy the voice from (see REFERENCE_MODES)."""
+    return store.set_voice_reference(profile_id, mode)
+
+
+@app.get("/voice_bank/references")
+async def preview_references(emotion: str = "neutral", profile_id: str = ""):
+    """Which recordings the NEXT /speak would send, so the page can show it before
+    generating. Returns {"error": ...} (status 200) when the setting can't be met."""
+    profile = resolve_profile(profile_id)
+    if profile["voice_type"] == "stock":
+        return {"mode": "stock", "clips": []}
+    try:
+        return voice_reference_info(*store.choose_references(profile["id"], emotion))
+    except ProfileError as e:
+        return {"mode": profile["voice_reference"], "mode_label": REFERENCE_MODES[profile["voice_reference"]],
+                "clips": [], "error": str(e)}
 
 
 @app.get("/stats/summary")

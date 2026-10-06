@@ -106,7 +106,11 @@ def test_speak_sends_correct_request_to_colab(fake_colab):
     r = client.post("/speak", data={"text": "I NEED HELP", "emotion": "urgent"})
 
     assert r.status_code == 200
-    assert r.json() == {"audio_base64": "UklGRg=="}       # passed straight to the browser
+    reply = r.json()
+    assert reply["audio_base64"] == "UklGRg=="             # passed straight to the browser
+    # ...plus exactly which recordings were sent (shown on the page)
+    assert reply["voice_reference"]["source"] == "emotion_clips"
+    assert [c["name"] for c in reply["voice_reference"]["clips"]] == ["urgent/000001.webm", "urgent/000002.webm"]
     assert fake_colab["url"] == "https://colab.test/synthesize"
     assert fake_colab["headers"]["ngrok-skip-browser-warning"] == "true"
 
@@ -281,4 +285,4 @@ def test_speak_forwards_f5_reference_transcript(fake_colab):
     fake_colab["reply"] = FakeResponse(200, {"audio_base64": "x", "ref_text": "Hello, this is me."})
     upload("neutral")
     r = client.post("/speak", data={"text": "HELLO", "emotion": "neutral", "engine": "f5"})
-    assert r.json() == {"audio_base64": "x", "ref_text": "Hello, this is me."}
+    assert r.json()["ref_text"] == "Hello, this is me."

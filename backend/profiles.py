@@ -69,6 +69,79 @@ def wav_duration(data: bytes) -> float:
     return frames / rate
 
 
+# ---- which recordings /speak copies the voice from ("Voice reference" in the Voice Bank) ----
+REFERENCE_MODES = {
+    "auto": "Auto",                              # emotion clips > uploads > guided takes
+    "uploads": "Uploaded recordings only",
+    "recorded": "Recorded clips only",
+    "guided": "Guided takes only",
+}
+
+
+def _ebml_number(data: bytes, i: int, keep_marker=False):
+    """Reads one EBML variable-length number (WebM's building block).
+    Returns (value, how many bytes it used, whether it means "unknown size")."""
+    first = data[i]
+    length, mask = 1, 0x80
+    while length <= 8 and not first & mask:
+        mask >>= 1
+        length += 1
+    if length > 8:
+        raise ValueError("bad EBML number")
+    value = first if keep_marker else first & (mask - 1)
+    unknown = (first & (mask - 1)) == mask - 1
+    for k in range(1, length):
+        value = (value << 8) | data[i + k]
+        unknown = unknown and data[i + k] == 0xFF
+    return value, length, unknown
+
+
+def webm_duration(data: bytes):
+    """Length in seconds of a browser (MediaRecorder) WebM recording, or None.
+    Browsers don't write the length into the file, so we read the time stamp of
+    the last block of audio (accurate to ~20 ms, one Opus frame)."""
+    scale_ns, cluster_ms, last_ms = 1_000_000, 0, None
+    containers = {0x18538067, 0x1F43B675, 0x1549A966, 0xA0}   # Segment, Cluster, Info, BlockGroup
+    i = 0
+    try:
+        while i < len(data):
+            element, n, _ = _ebml_number(data, i, keep_marker=True)
+            i += n
+            size, n, unknown = _ebml_number(data, i)
+            i += n
+            if element in containers:
+                continue                                    # step INTO it
+            body = data[i:i + size]
+            if element == 0x2AD7B1:                         # TimecodeScale
+                scale_ns = int.from_bytes(body, "big")
+            elif element == 0xE7:                           # Cluster time stamp
+                cluster_ms = int.from_bytes(body, "big")
+            elif element in (0xA3, 0xA1):                   # a block of audio
+                _, tn, _ = _ebml_number(data, i)
+                block_ms = cluster_ms + int.from_bytes(data[i + tn:i + tn + 2], "big", signed=True)
+                last_ms = block_ms if last_ms is None else max(last_ms, block_ms)
+            if unknown:
+                break
+            i += size
+    except (ValueError, IndexError):
+        pass                                                # damaged file: use what we found
+    return None if last_ms is None else round(last_ms * scale_ns / 1e9 + 0.02, 2)
+
+
+def clip_duration(path: Path):
+    """Length in seconds of a stored clip (WAV or browser WebM), or None if unknown."""
+    data = path.read_bytes()
+    if path.suffix.lower() == ".wav":
+        try:
+            with wave.open(io.BytesIO(data)) as w:
+                return round(w.getnframes() / w.getframerate(), 2)
+        except (wave.Error, EOFError, ZeroDivisionError):
+            return None
+    if path.suffix.lower() == ".webm":
+        return webm_duration(data)
+    return None
+
+
 def make_profile_id(name: str) -> str:
     """'Mr Sharma' -> 'mr-sharma-3fa2' (readable, plus a random part so ids never clash)."""
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] or "user"
@@ -140,8 +213,19 @@ class ProfileStore:
     def get(self, profile_id: str) -> dict:
         folder = self._folder(profile_id)
         profile = json.loads((folder / "profile.json").read_text(encoding="utf-8"))
+        profile.setdefault("voice_reference", "auto")     # older profiles don't have it yet
         profile["clip_counts"] = self.clip_counts(profile_id)
         return profile
+
+    def set_voice_reference(self, profile_id: str, mode: str) -> dict:
+        """Which recordings /speak copies the voice from (see REFERENCE_MODES)."""
+        if mode not in REFERENCE_MODES:
+            raise ProfileError(f"Unknown voice reference '{mode}'. Use one of: {', '.join(REFERENCE_MODES)}.")
+        path = self._folder(profile_id) / "profile.json"
+        profile = json.loads(path.read_text(encoding="utf-8"))
+        profile["voice_reference"] = mode
+        path.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+        return self.get(profile_id)
 
     def list(self) -> list:
         """All profiles, oldest first."""
@@ -209,6 +293,48 @@ class ProfileStore:
     def get_clips(self, profile_id: str, emotion: str) -> list:
         """The saved recordings for one emotion, as raw bytes (oldest first)."""
         return [f.read_bytes() for f in self._clip_files(self._clip_folder(profile_id, emotion))]
+
+    # ---------- the voice references /speak sends to Colab ----------
+    # Each one is a dict: source, name (file shown on the page), duration_s, data (bytes).
+    def _reference(self, source: str, name: str, path: Path, duration=None) -> dict:
+        measured = clip_duration(path)
+        return {"source": source, "name": name, "data": path.read_bytes(),
+                "duration_s": measured if measured is not None else duration}
+
+    def emotion_references(self, profile_id: str, emotion: str) -> list:
+        folder = self._clip_folder(profile_id, emotion)
+        return [self._reference("emotion_clips", f"{emotion}/{f.name}", f) for f in self._clip_files(folder)]
+
+    def choose_references(self, profile_id: str, emotion: str) -> tuple:
+        """The recordings /speak sends to Colab, following the user's "Voice reference"
+        setting. Returns (mode, source, references). If the setting asks for one kind
+        and there is none, raises a clear ProfileError: we never quietly swap in other
+        recordings (that once made an uploaded voice sound wrong without anyone knowing)."""
+        profile = self.get(profile_id)
+        mode = profile["voice_reference"]
+        finders = {
+            "recorded": ("emotion_clips", lambda: self.emotion_references(profile_id, emotion)),
+            "uploads": ("uploaded_recordings", lambda: self.upload_references(profile_id)),
+            "guided": ("guided_references", lambda: self.guided_references(profile_id)),
+        }
+        if mode == "auto":
+            for source, find in finders.values():          # in order: recorded, uploads, guided
+                refs = find()
+                if refs:
+                    return mode, source, refs
+            raise ProfileError(f"No voice sample recorded yet for emotion '{emotion}'. "
+                               "Record one, upload old recordings, or use guided recordings as voice references.")
+        source, find = finders[mode]
+        refs = find()
+        if not refs:
+            missing = {
+                "recorded": f"no recorded clip for the emotion '{emotion}'",
+                "uploads": "no uploaded recordings",
+                "guided": "no guided takes chosen as voice references",
+            }[mode]
+            raise ProfileError(f"Voice reference is set to '{REFERENCE_MODES[mode]}', but {profile['name']} "
+                               f"has {missing}. Add some, or change the Voice reference setting.")
+        return mode, source, refs
 
     def clip_counts(self, profile_id: str) -> dict:
         clips_root = self._folder(profile_id) / "clips"
@@ -441,7 +567,7 @@ class ProfileStore:
         self._write_uploads(profile_id, manifest)
         return self.list_uploads(profile_id)
 
-    def get_upload_clips(self, profile_id: str, target_seconds: float = 45.0, max_clips: int = 6) -> list:
+    def upload_references(self, profile_id: str, target_seconds: float = 45.0, max_clips: int = 6) -> list:
         """Uploaded clips to send to Colab as voice references: the ones with the most
         speech first, until about 45 s (XTTS uses up to 30 s; F5 takes the longest clip).
         Capped so each request through ngrok stays small."""
@@ -450,23 +576,35 @@ class ProfileStore:
         for c in clips[:max_clips]:
             path = self._uploads_dir(profile_id) / f"{c['id']}.wav"
             if path.is_file():
-                out.append(path.read_bytes())
+                out.append(self._reference("uploaded_recordings", f"{c['original_name']} (#{c['id']})",
+                                           path, c["duration_s"]))
                 total += c["duration_s"]
             if total >= target_seconds:
                 break
         return out
+
+    def get_upload_clips(self, profile_id: str, target_seconds: float = 45.0, max_clips: int = 6) -> list:
+        """Same as upload_references, as raw bytes only."""
+        return [r["data"] for r in self.upload_references(profile_id, target_seconds, max_clips)]
 
     def clear_references(self, profile_id: str):
         manifest = self._read_manifest(profile_id)
         manifest["references"] = []
         self._write_manifest(profile_id, manifest)
 
-    def get_reference_clips(self, profile_id: str) -> list:
-        """The chosen guided recordings as raw bytes (skips any that were deleted)."""
+    def guided_references(self, profile_id: str) -> list:
+        """The guided recordings chosen as voice references (skips any that were deleted)."""
+        manifest = self._read_manifest(profile_id)
         out = []
-        for sid in self._read_manifest(profile_id)["references"]:
+        for sid in manifest["references"]:
             try:
-                out.append(self.guided_audio_path(profile_id, sid).read_bytes())
+                path = self.guided_audio_path(profile_id, sid)
             except ProfileNotFound:
                 continue
+            out.append(self._reference("guided_references", path.name, path,
+                                       manifest["recordings"][sid]["duration_s"]))
         return out
+
+    def get_reference_clips(self, profile_id: str) -> list:
+        """The chosen guided recordings as raw bytes."""
+        return [r["data"] for r in self.guided_references(profile_id)]
