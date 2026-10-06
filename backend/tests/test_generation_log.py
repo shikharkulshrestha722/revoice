@@ -230,8 +230,13 @@ def test_old_log_file_is_upgraded_to_the_new_columns(tmp_path):
 
 def test_summary_similarity_and_accent_match_per_engine(tmp_path):
     path = str(tmp_path / "log.csv")
+    def stats(label):        # Colab v8 style: clear winner, enough speech
+        return {"speech_seconds": 6.0, "accent_scores": [[label, 0.6], ["other", 0.4], ["third", 0.3]]}
+
     def add(engine, sim, match, ok=True, synth=None):
-        m = {"similarity": sim, "accent_match": match, "reference": None, "output": None}
+        m = {"similarity": sim, "reference": None, "output": None}
+        if match is not None:
+            m.update(reference=stats("indian"), output=stats("indian" if match else "us"))
         log_generation(path, text="HI", engine=engine, emotion="neutral", seconds=5.0,
                        success=ok, synth_seconds=synth, metrics=m)
     add("xtts", 0.70, True, synth=3.0)

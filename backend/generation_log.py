@@ -21,8 +21,10 @@
 #   synth_seconds         speech generation alone, measured on Colab (no network, no metrics)
 #   similarity            how similar the output voice is to the person's real voice
 #                         (speaker-embedding cosine similarity, 1 = identical)
-#   ref_/out_accent       estimated English accent of the real voice / of the output
-#   accent_match          yes if both got the same accent label
+#   ref_/out_accent       estimated English accent of the real voice / of the output, only
+#                         when there were >= 3 s of speech ("too_short" otherwise; see accent.py)
+#   accent_match          yes/no only when BOTH sides are long enough and at least medium
+#                         confidence; empty when it can't fairly be judged
 #   ref_/out_pitch_hz     average pitch of the real voice / of the output
 #   ref_/out_words_per_sec  speaking rate of the real voice / of the output
 #   ref_mode              the Voice reference setting: auto / uploads / recorded / guided
@@ -30,6 +32,8 @@
 #                         "Recording (2).m4a (#000001) 17.99s" (several joined with " | ")
 #   ref_seconds           total length of those recordings
 #   ref_text              F5 only: the words Whisper heard in the reference it copied
+#   ref_/out_accent_scores  the 3 most likely accents with RAW scores (-1..1, not %),
+#                         e.g. "indian 0.638; us 0.511; scotland 0.282" (Colab v8+)
 # ============================================================
 
 import csv
@@ -39,13 +43,17 @@ import threading
 from collections import defaultdict
 from datetime import datetime, timezone
 
+from accent import compare_accents, judge_accent, scores_text
+
 FIELDS = ["timestamp", "utterance_id", "engine", "emotion", "voice_source", "chars", "words",
           "selections", "letter_by_letter", "selections_saved_pct", "seconds", "success", "error",
           # voice evaluation (added later, so they come last)
           "synth_seconds", "similarity", "ref_accent", "out_accent", "accent_match",
           "ref_pitch_hz", "out_pitch_hz", "ref_words_per_sec", "out_words_per_sec",
           # which recordings the voice was copied from (added later again)
-          "ref_mode", "ref_files", "ref_seconds", "ref_text"]
+          "ref_mode", "ref_files", "ref_seconds", "ref_text",
+          # accent as raw top-3 scores (Colab v8)
+          "ref_accent_scores", "out_accent_scores"]
 
 _lock = threading.Lock()   # two requests at once must not mix up their lines
 
@@ -75,12 +83,21 @@ def metric_columns(metrics) -> dict:
     m = metrics or {}
     ref = m.get("reference") or {}
     out = m.get("output") or {}
-    match = m.get("accent_match")
+    ref_j, out_j = judge_accent(ref), judge_accent(out)
+    if ref_j["status"] == "old_notebook" or out_j["status"] == "old_notebook":
+        match = m.get("accent_match")                 # Colab before v8 decided it itself
+    else:
+        match = compare_accents(ref_j, out_j)["match"] if m.get("reference") else None
+
+    def accent_label(j):
+        return j.get("label", "") if j["status"] in ("ok", "old_notebook") else             ("too_short" if j["status"] == "too_short" else "")
     return {
         "similarity": _blank(m.get("similarity")),
-        "ref_accent": ref.get("accent") or "",
-        "out_accent": out.get("accent") or "",
+        "ref_accent": accent_label(ref_j),
+        "out_accent": accent_label(out_j),
         "accent_match": "" if match is None else ("yes" if match else "no"),
+        "ref_accent_scores": scores_text(ref_j),
+        "out_accent_scores": scores_text(out_j),
         "ref_pitch_hz": _blank(ref.get("pitch_hz")),
         "out_pitch_hz": _blank(out.get("pitch_hz")),
         "ref_words_per_sec": _blank(ref.get("words_per_sec")),

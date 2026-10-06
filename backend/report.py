@@ -45,6 +45,7 @@ def main():
     print("\nVoice quality per engine (successful requests with metrics)")
     print("  similarity = speaker-embedding cosine similarity to the real voice (1 = identical)")
     print("  accent match = output got the same estimated accent label as the real voice")
+    print("                 (only sentences with >= 3 s of speech and a clear winner on both sides)")
     header = f"{'Engine':<10}{'Similarity':>11}{'(n)':>5}{'Accent match':>14}{'(n)':>5}{'Synthesis only (s)':>20}"
     print(header)
     print("-" * len(header))
