@@ -139,8 +139,11 @@
             <option value="recorded">Recorded clips only</option>
             <option value="guided">Guided takes only</option>
           </select>
+          <!-- with "Uploaded recordings only": all uploads, or one chosen clip -->
+          <select id="referenceClip" aria-label="Which uploaded clip" hidden></select>
         </div>
         <div id="voiceRefPreview" class="ref-used" hidden></div>
+        <div id="voiceRefPreviewXtts" class="ref-used" hidden></div>
       </div>
       <p id="stockNote" class="hint" hidden></p>
 
@@ -153,6 +156,8 @@
           <option value="both">Compare both</option>
         </select>
         <button id="speakBtn" class="primary speak-btn">Generate &amp; Speak</button>
+        <!-- caregiver: the exact sentence of Colab's Step 4b test, for a fair comparison -->
+        <button id="testSentenceBtn" title="Speaks the Colab Step 4b test sentence (neutral emotion)">Test sentence</button>
       </div>
       <!-- caregiver setting: accent estimates are rough, so they're hidden unless asked for -->
       <div class="controls-row">

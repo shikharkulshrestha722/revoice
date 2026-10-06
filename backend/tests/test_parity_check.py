@@ -65,3 +65,16 @@ def test_profile_row_shows_what_a_real_user_sends(tmp_path, monkeypatch, capsys,
     assert parity_check.main() == 0
     assert [base64.b64decode(c) for c in fake_colab[2]["speaker_wav_base64_list"]] == [b"mic clip"]
     assert "sends DIFFERENT audio from this file: neutral/000001.webm" in capsys.readouterr().out
+
+
+def test_test_sentence_is_the_same_everywhere():
+    """The page's Test sentence button, this script and Colab's Step 4b must speak the
+    SAME sentence, or the 'fair comparison' isn't fair."""
+    import json
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    page = re.search(r'const TEST_SENTENCE = "([^"]+)"', (root / "frontend" / "app.js").read_text(encoding="utf-8"))
+    notebook = json.loads((root / "colab" / "revoice_server_v2.ipynb").read_text(encoding="utf-8"))
+    step_4b = re.search(r'TEST_SENTENCE = "([^"]+)"', "".join(c["source"] for c in notebook["cells"]))
+    assert page.group(1) == step_4b.group(1) == parity_check.TEST_SENTENCE

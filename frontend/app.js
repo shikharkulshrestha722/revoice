@@ -820,30 +820,67 @@ async function updateVoiceBankStatus() {
       : `No clips recorded yet for "${emotion}" (${activeProfile.name}).`;
 
     // exactly which recordings the NEXT generation will copy the voice from
+    // (F5 gets one clip, XTTS all of them, so "Compare both" shows each engine)
     const pid = encodeURIComponent(activeProfile.id);
-    const preview = await (await fetch(
-      `/voice_bank/references?profile_id=${pid}&emotion=${encodeURIComponent(emotion)}`)).json();
-    showRefUsed(document.getElementById("voiceRefPreview"), preview, "Next generation: ");
+    const preview = (engine) => fetch(`/voice_bank/references?profile_id=${pid}` +
+      `&emotion=${encodeURIComponent(emotion)}&engine=${engine}`).then((r) => r.json());
+    const chosen = document.getElementById("engine").value;
+    const first = chosen === "both" ? "f5" : chosen;
+    showRefUsed(document.getElementById("voiceRefPreview"), await preview(first),
+                `Next ${ENGINE_NAMES[first]} generation: `);
+    const xttsEl = document.getElementById("voiceRefPreviewXtts");
+    if (chosen === "both") showRefUsed(xttsEl, await preview("xtts"), "Next XTTS-v2 generation: ");
+    else xttsEl.hidden = true;
+    await updateReferenceClipChoice();
   } catch (err) { /* ignore */ }
 }
 
 document.getElementById("emotion").onchange = updateVoiceBankStatus;
+document.getElementById("engine").addEventListener("change", updateVoiceBankStatus);
+
+// The uploaded-clip picker, shown with "Uploaded recordings only": all uploads
+// (most speech first), or ONE chosen clip so a weaker upload is never picked by itself.
+async function updateReferenceClipChoice() {
+  const select = document.getElementById("referenceClip");
+  select.hidden = activeProfile?.voice_reference !== "uploads";
+  if (select.hidden) return;
+  const data = await (await fetch(`/uploads?profile_id=${encodeURIComponent(activeProfile.id)}`)).json();
+  const options = [new Option("All uploads (most speech first)", "")];
+  for (const c of data.clips || []) {
+    options.push(new Option(`${c.original_name} (#${c.id}) · ${c.duration_s.toFixed(1)} s, ` +
+                            `${c.speech_s.toFixed(1)} s speech`, c.id));
+  }
+  const chosen = activeProfile.reference_clip || "";
+  if (chosen && !(data.clips || []).some((c) => c.id === chosen)) {
+    options.push(new Option(`#${chosen} (deleted: choose another)`, chosen));
+  }
+  select.replaceChildren(...options);
+  select.value = chosen;
+}
 
 // "Voice reference" setting (caregiver): saved on the server, per user
-document.getElementById("voiceReference").onchange = async (e) => {
+async function saveVoiceReference() {
   if (!activeProfile) return;
+  const mode = document.getElementById("voiceReference").value;
+  const clipId = mode === "uploads" ? document.getElementById("referenceClip").value : "";
   const res = await fetch(`/profiles/${encodeURIComponent(activeProfile.id)}/voice_reference`,
-                          { method: "POST", body: new URLSearchParams({ mode: e.target.value }) });
+                          { method: "POST", body: new URLSearchParams({ mode, clip_id: clipId }) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     showToast("Could not change the voice reference: " + (data.error || res.status), "error");
-    e.target.value = activeProfile.voice_reference || "auto";
+    document.getElementById("voiceReference").value = activeProfile.voice_reference || "auto";
+    updateVoiceBankStatus();
     return;
   }
   activeProfile = data;
   profiles = profiles.map((p) => (p.id === data.id ? data : p));
   updateVoiceBankStatus();
+}
+document.getElementById("voiceReference").onchange = () => {
+  document.getElementById("referenceClip").value = "";      // a new mode starts with "all"
+  saveVoiceReference();
 };
+document.getElementById("referenceClip").onchange = saveVoiceReference;
 
 document.getElementById("recordBtn").onclick = async () => {
   const statusEl = document.getElementById("recordStatus");
@@ -975,14 +1012,18 @@ function showRefUsed(el, ref, prefix = "") {
 
 // Asks the backend for speech from ONE engine.
 // Returns { audioSrc, seconds, refText, metrics, voiceReference } or throws an Error with a readable message.
-async function requestSpeech(engine, text, emotion) {
+// counted = false for the Test sentence: it isn't the patient's sentence, so it must
+// not count in the "selections saved" evidence.
+async function requestSpeech(engine, text, emotion, counted = true) {
   const formData = new FormData();
   formData.append("text", text);
   formData.append("emotion", emotion);
   formData.append("engine", engine);
   if (activeProfile) formData.append("profile_id", activeProfile.id);
-  formData.append("selections", selectionCount);    // for the generation log
-  formData.append("utterance_id", utteranceId);
+  if (counted) {
+    formData.append("selections", selectionCount);    // for the generation log
+    formData.append("utterance_id", utteranceId);
+  }
 
   const start = performance.now();
   const res = await fetch("/speak", { method: "POST", body: formData });
@@ -997,22 +1038,28 @@ async function requestSpeech(engine, text, emotion) {
            voiceReference: data.voice_reference || null };
 }
 
-document.getElementById("speakBtn").onclick = async () => {
+// The exact sentence Colab's Step 4b test speaks (backend/parity_check.py uses it too),
+// spoken with "neutral" like Step 4b, so website and Colab scores can be compared fairly.
+const TEST_SENTENCE = "Hello, this is a quick test of my cloned voice. Does it sound like me?";
+
+document.getElementById("speakBtn").onclick = () =>
+  speak(composedText, document.getElementById("emotion").value, true);
+document.getElementById("testSentenceBtn").onclick = () => speak(TEST_SENTENCE, "neutral", false);
+
+async function speak(text, emotion, counted) {
   const statusEl = document.getElementById("speakStatus");
-  const emotion = document.getElementById("emotion").value;
   const engine = document.getElementById("engine").value;
   const singleAudio = document.getElementById("outputAudio");
   const compareBox = document.getElementById("compareBox");
 
   if (speaking) return;
-  if (!composedText.trim()) {
+  if (!text.trim()) {
     statusEl.textContent = "Compose a sentence first.";
     return;
   }
 
   speaking = true;
   document.getElementById("speakBusy").hidden = false;    // animated "generating" dots
-  const text = composedText;   // remember the text now, in case it changes while we wait
   try {
     if (engine !== "both") {
       // --- one engine, one player ---
@@ -1027,7 +1074,7 @@ document.getElementById("speakBtn").onclick = async () => {
       showRefUsed(refUsedEl, null);
       statusEl.textContent = `Generating speech with ${ENGINE_NAMES[engine]}...`;
       try {
-        const { audioSrc, seconds, refText, metrics, voiceReference } = await requestSpeech(engine, text, emotion);
+        const { audioSrc, seconds, refText, metrics, voiceReference } = await requestSpeech(engine, text, emotion, counted);
         singleAudio.src = audioSrc;
         singleAudio.play();
         showRefText(refTextEl, refText);
@@ -1071,7 +1118,7 @@ document.getElementById("speakBtn").onclick = async () => {
       statusEl.textContent = `Generating with ${ENGINE_NAMES[eng]}...`;
       players[eng].time.textContent = "generating...";
       try {
-        const { audioSrc, seconds, refText, metrics, voiceReference } = await requestSpeech(eng, text, emotion);
+        const { audioSrc, seconds, refText, metrics, voiceReference } = await requestSpeech(eng, text, emotion, counted);
         players[eng].audio.src = audioSrc;
         players[eng].time.textContent = `took ${seconds.toFixed(1)}s`;
         if (eng === "f5") showRefText(refTextF5, refText);
@@ -1098,7 +1145,7 @@ document.getElementById("speakBtn").onclick = async () => {
     speaking = false;
     document.getElementById("speakBusy").hidden = true;
   }
-};
+}
 
 
 // ---------- GUIDED VOICE BANKING ----------
