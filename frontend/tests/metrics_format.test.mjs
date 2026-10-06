@@ -66,3 +66,23 @@ test("unknown accent labels are shown as they are", () => {
   assert.equal(accentName("martian"), "martian");
   assert.equal(accentName(null), "n/a");
 });
+
+test("reference lines say exactly which clips were sent", async () => {
+  const { referenceLines } = await import("../metrics_format.js");
+  assert.deepEqual(referenceLines({
+    mode: "uploads", mode_label: "Uploaded recordings only", source: "uploaded_recordings", total_seconds: 17.99,
+    clips: [{ source: "uploaded_recordings", name: "Recording (2).m4a (#000001)", duration_s: 17.99 }],
+  }), ["Voice copied from 1 clip (setting: Uploaded recordings only):",
+       "uploaded · Recording (2).m4a (#000001) · 18.0 s"]);
+
+  assert.deepEqual(referenceLines({
+    mode: "auto", mode_label: "Auto", total_seconds: 39.8,
+    clips: [{ source: "emotion_clips", name: "neutral/000001.webm", duration_s: 19.92 },
+            { source: "emotion_clips", name: "neutral/000002.webm", duration_s: null }],
+  }), ["Voice copied from 2 clips, 39.8 s in total (setting: Auto):",
+       "emotion recording · neutral/000001.webm · 19.9 s",
+       "emotion recording · neutral/000002.webm · length unknown"]);
+
+  assert.deepEqual(referenceLines(undefined), []);                  // stock voice / old backend
+  assert.deepEqual(referenceLines({ clips: [], error: "No uploads." }), ["No uploads."]);
+});

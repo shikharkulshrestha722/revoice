@@ -10,8 +10,8 @@
 import { PointerTracker, DwellSelector, detectLaserBlob } from "./tracking.js";
 import { analyzeLevels, PROBLEM_MESSAGES } from "./audio_checks.js";
 import { selectionSavings } from "./selection_stats.js";
-import { metricsLines, moreSimilarEngine } from "./metrics_format.js";
-import { mixToMono, trimSamples, encodeWav16, waveformPeaks, speechChunks, speechSecondsInRange,
+import { metricsLines, moreSimilarEngine, referenceLines } from "./metrics_format.js";
+import { mixToMono, convertForUpload, waveformPeaks, speechChunks, speechSecondsInRange,
          hasAllowedExtension } from "./audio_prep.js";
 
 // MediaPipe is loaded later, only when Finger mode needs it.
@@ -651,6 +651,8 @@ function applyProfileToVoiceControls() {
   else if (engineEl.dataset.forcedForStock) engineEl.value = "f5";   // back to the default
   engineEl.dataset.forcedForStock = isStock ? "yes" : "";
 
+  document.getElementById("voiceReference").value = activeProfile?.voice_reference || "auto";
+  if (isStock) document.getElementById("voiceRefPreview").hidden = true;
   updateVoiceBankStatus();
 }
 
@@ -813,25 +815,35 @@ async function updateVoiceBankStatus() {
     const counts = await res.json();
     const emotion = document.getElementById("emotion").value;
     const n = counts[emotion] || 0;
-    // no clip for this emotion: the server falls back to uploaded recordings, then guided ones
-    let fallback = "";
-    if (n === 0) {
-      const pid = encodeURIComponent(activeProfile.id);
-      const up = await (await fetch(`/uploads?profile_id=${pid}`)).json();
-      if ((up.clips || []).length) fallback = "the uploaded old recordings";
-      else {
-        const g = await (await fetch(`/guided/status?profile_id=${pid}`)).json();
-        if ((g.references || []).length) fallback = "your guided recordings";
-      }
-    }
-    statusEl.textContent =
-      n > 0 ? `${n} clip(s) saved for "${emotion}" (${activeProfile.name}). 2-3 gives the best result.`
-      : fallback ? `No "${emotion}" clip yet, so ${fallback} will be used (${activeProfile.name}).`
-      : `No clips yet for "${emotion}" (${activeProfile.name}).`;
+    statusEl.textContent = n > 0
+      ? `${n} clip(s) saved for "${emotion}" (${activeProfile.name}). 2-3 gives the best result.`
+      : `No clips recorded yet for "${emotion}" (${activeProfile.name}).`;
+
+    // exactly which recordings the NEXT generation will copy the voice from
+    const pid = encodeURIComponent(activeProfile.id);
+    const preview = await (await fetch(
+      `/voice_bank/references?profile_id=${pid}&emotion=${encodeURIComponent(emotion)}`)).json();
+    showRefUsed(document.getElementById("voiceRefPreview"), preview, "Next generation: ");
   } catch (err) { /* ignore */ }
 }
 
 document.getElementById("emotion").onchange = updateVoiceBankStatus;
+
+// "Voice reference" setting (caregiver): saved on the server, per user
+document.getElementById("voiceReference").onchange = async (e) => {
+  if (!activeProfile) return;
+  const res = await fetch(`/profiles/${encodeURIComponent(activeProfile.id)}/voice_reference`,
+                          { method: "POST", body: new URLSearchParams({ mode: e.target.value }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    showToast("Could not change the voice reference: " + (data.error || res.status), "error");
+    e.target.value = activeProfile.voice_reference || "auto";
+    return;
+  }
+  activeProfile = data;
+  profiles = profiles.map((p) => (p.id === data.id ? data : p));
+  updateVoiceBankStatus();
+};
 
 document.getElementById("recordBtn").onclick = async () => {
   const statusEl = document.getElementById("recordStatus");
@@ -890,6 +902,7 @@ document.getElementById("recordBtn").onclick = async () => {
     statusEl.textContent =
       `Saved ${seconds.toFixed(0)}s clip. ${data.clips} clip(s) for "${data.emotion}". 2-3 gives the best result.`;
     showToast(`Voice clip saved for "${data.emotion}".`);
+    updateVoiceBankStatus();                       // "Next generation" list may have changed
   };
 
   recorder.start();
@@ -937,8 +950,20 @@ function showMetrics(el, metrics) {
   el.hidden = lines.length === 0;
 }
 
+// Which recordings the voice was copied from (or why none could be used), one line each.
+function showRefUsed(el, ref, prefix = "") {
+  const lines = referenceLines(ref);
+  el.replaceChildren(...lines.map((line, i) => {
+    const div = document.createElement("div");
+    div.textContent = i === 0 ? prefix + line : "• " + line;
+    return div;
+  }));
+  el.classList.toggle("error", Boolean(ref && ref.error));
+  el.hidden = lines.length === 0;
+}
+
 // Asks the backend for speech from ONE engine.
-// Returns { audioSrc, seconds, refText, metrics } or throws an Error with a readable message.
+// Returns { audioSrc, seconds, refText, metrics, voiceReference } or throws an Error with a readable message.
 async function requestSpeech(engine, text, emotion) {
   const formData = new FormData();
   formData.append("text", text);
@@ -957,7 +982,8 @@ async function requestSpeech(engine, text, emotion) {
   if (!res.ok) throw new Error(data.error || `server returned ${res.status}`);
 
   return { audioSrc: "data:audio/wav;base64," + data.audio_base64, seconds,
-           refText: data.ref_text || "", metrics: data.metrics || null };
+           refText: data.ref_text || "", metrics: data.metrics || null,
+           voiceReference: data.voice_reference || null };
 }
 
 document.getElementById("speakBtn").onclick = async () => {
@@ -983,16 +1009,19 @@ document.getElementById("speakBtn").onclick = async () => {
       singleAudio.hidden = false;
       const refTextEl = document.getElementById("refTextSingle");
       const metricsEl = document.getElementById("metricsSingle");
+      const refUsedEl = document.getElementById("refUsedSingle");
       clearPlayer(singleAudio);
       showRefText(refTextEl, "");
       showMetrics(metricsEl, null);
+      showRefUsed(refUsedEl, null);
       statusEl.textContent = `Generating speech with ${ENGINE_NAMES[engine]}...`;
       try {
-        const { audioSrc, seconds, refText, metrics } = await requestSpeech(engine, text, emotion);
+        const { audioSrc, seconds, refText, metrics, voiceReference } = await requestSpeech(engine, text, emotion);
         singleAudio.src = audioSrc;
         singleAudio.play();
         showRefText(refTextEl, refText);
         showMetrics(metricsEl, metrics);
+        showRefUsed(refUsedEl, voiceReference);
         statusEl.textContent = `Done in ${seconds.toFixed(1)}s (${ENGINE_NAMES[engine]}).`;
       } catch (err) {
         statusEl.textContent = "Error: " + err.message;
@@ -1010,12 +1039,14 @@ document.getElementById("speakBtn").onclick = async () => {
     const player = (id) => ({
       audio: document.getElementById("audio" + id), time: document.getElementById("time" + id),
       metrics: document.getElementById("metrics" + id), item: document.getElementById("item" + id),
+      refUsed: document.getElementById("refUsed" + id),
       badge: document.getElementById("badge" + id),
     });
     const players = { xtts: player("Xtts"), f5: player("F5") };
     for (const p of Object.values(players)) {
       clearPlayer(p.audio);
       showMetrics(p.metrics, null);
+      showRefUsed(p.refUsed, null);
       p.item.classList.remove("winner");
       p.badge.hidden = true;
       p.time.textContent = "waiting...";
@@ -1029,11 +1060,12 @@ document.getElementById("speakBtn").onclick = async () => {
       statusEl.textContent = `Generating with ${ENGINE_NAMES[eng]}...`;
       players[eng].time.textContent = "generating...";
       try {
-        const { audioSrc, seconds, refText, metrics } = await requestSpeech(eng, text, emotion);
+        const { audioSrc, seconds, refText, metrics, voiceReference } = await requestSpeech(eng, text, emotion);
         players[eng].audio.src = audioSrc;
         players[eng].time.textContent = `took ${seconds.toFixed(1)}s`;
         if (eng === "f5") showRefText(refTextF5, refText);
         showMetrics(players[eng].metrics, metrics);
+        showRefUsed(players[eng].refUsed, voiceReference);
         metricsByEngine[eng] = metrics;
         report.push(`${ENGINE_NAMES[eng]} ${seconds.toFixed(1)}s`);
       } catch (err) {
@@ -1576,19 +1608,12 @@ function previewItem(item) {
 }
 
 // ----- 3. save: trim -> mono -> 24 kHz -> WAV -> upload -----
-async function toUploadWav(item) {
-  const part = trimSamples(item.mono, item.rate, item.start, item.end);
-  // let the browser resample properly (it filters out frequencies that would distort)
-  const frames = Math.max(1, Math.round((part.length / item.rate) * UPLOAD_RATE));
-  const offline = new OfflineAudioContext(1, frames, UPLOAD_RATE);
-  const buf = offline.createBuffer(1, part.length, item.rate);
-  buf.copyToChannel(part, 0);
-  const src = offline.createBufferSource();
-  src.buffer = buf;
-  src.connect(offline.destination);
-  src.start();
-  const rendered = await offline.startRendering();
-  return new Blob([encodeWav16(rendered.getChannelData(0), UPLOAD_RATE)], { type: "audio/wav" });
+// Done by our own tested code (audio_prep.js, see tests/upload_conversion.test.mjs),
+// not the browser's resampler, so we KNOW the voice isn't changed on the way.
+function toUploadWav(item) {
+  const { wav, clipped } = convertForUpload([item.mono], item.rate, item.start, item.end, UPLOAD_RATE);
+  if (clipped) console.warn(`${item.name}: ${clipped} samples were too loud and had to be clipped`);
+  return new Blob([wav], { type: "audio/wav" });
 }
 
 uploadEl("uploadSaveBtn").onclick = async () => {
@@ -1615,7 +1640,7 @@ uploadEl("uploadSaveBtn").onclick = async () => {
       formData.append("speech_s", item.speech.toFixed(2));
       formData.append("consent", "true");
       formData.append("consented_by", consentName);
-      formData.append("file", await toUploadWav(item), "clip.wav");
+      formData.append("file", toUploadWav(item), "clip.wav");
       const res = await fetch("/uploads", { method: "POST", body: formData });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `server returned ${res.status}`);
@@ -1641,6 +1666,7 @@ async function refreshSavedUploads() {
 }
 
 function showSavedUploads(data) {
+  updateVoiceBankStatus();                         // "Next generation" list may have changed
   const box = uploadEl("uploadSaved");
   box.replaceChildren(...data.clips.map((clip) => {
     const row = document.createElement("div");

@@ -130,6 +130,17 @@
           <button id="openGuidedBtn">Guided voice banking (read sentences)</button>
           <button id="openUploadBtn">Upload old recordings</button>
         </div>
+        <!-- caregiver setting: which recordings the voice is copied from -->
+        <div class="controls-row">
+          <label for="voiceReference">Voice reference:</label>
+          <select id="voiceReference">
+            <option value="auto">Auto (emotion clip &gt; uploads &gt; guided)</option>
+            <option value="uploads">Uploaded recordings only</option>
+            <option value="recorded">Recorded clips only</option>
+            <option value="guided">Guided takes only</option>
+          </select>
+        </div>
+        <div id="voiceRefPreview" class="ref-used" hidden></div>
       </div>
       <p id="stockNote" class="hint" hidden></p>
 
@@ -147,6 +158,7 @@
       <!-- single engine: one player -->
       <audio id="outputAudio" controls></audio>
       <p id="refTextSingle" class="ref-text" hidden></p>
+      <div id="refUsedSingle" class="ref-used" hidden></div>
       <div id="metricsSingle" class="metrics" hidden></div>
 
       <!-- "Compare both": one labelled player per engine -->
@@ -156,6 +168,7 @@
           <span id="badgeXtts" class="winner-badge" hidden>&#9733; more similar voice</span>
           <audio id="audioXtts" controls></audio>
           <div id="metricsXtts" class="metrics" hidden></div>
+          <div id="refUsedXtts" class="ref-used" hidden></div>
         </div>
         <div id="itemF5" class="compare-item">
           <strong>F5-TTS</strong> <span id="timeF5" class="compare-time"></span>
@@ -163,6 +176,7 @@
           <audio id="audioF5" controls></audio>
           <p id="refTextF5" class="ref-text" hidden></p>
           <div id="metricsF5" class="metrics" hidden></div>
+          <div id="refUsedF5" class="ref-used" hidden></div>
         </div>
       </div>
       <div class="status-row">

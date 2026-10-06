@@ -417,6 +417,24 @@ audio {
   margin: 4px 0 0;
 }
 
+/* which recordings the voice was copied from (under each player + in the Voice Bank) */
+.ref-used {
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  margin-top: var(--space-2);
+  line-height: 1.6;
+  overflow-wrap: anywhere;           /* long file names wrap instead of widening the page */
+}
+.ref-used.error {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-left-color: var(--danger);
+}
+
 .compare-time {
   color: var(--text-muted);
   font-size: var(--text-sm);
@@ -666,7 +684,7 @@ button.primary.recording::before { background: currentColor; }   /* on the red b
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: none; }
 }
-audio[src], .metrics, .ref-text { animation: fade-in 200ms ease-out both; }
+audio[src], .metrics, .ref-text, .ref-used { animation: fade-in 200ms ease-out both; }
 
 /* "more similar voice" badge pops in */
 @keyframes pop-in {

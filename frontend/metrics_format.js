@@ -73,3 +73,25 @@ export function moreSimilarEngine(metricsByEngine) {
   const measured = Object.values(metricsByEngine).filter((m) => similarityValue(m) !== null).length;
   return measured >= 2 && !tie ? best : null;
 }
+
+// ---- which recordings the voice was copied from (sent back by /speak) ----
+// e.g. ["Voice copied from 1 clip (setting: Uploaded recordings only):",
+//       "uploaded · Recording (2).m4a (#000001) · 18.0 s"]
+const SOURCE_NAMES = {
+  emotion_clips: "emotion recording", uploaded_recordings: "uploaded", guided_references: "guided take",
+};
+
+export function seconds(value) {
+  return isNum(value) ? `${value.toFixed(1)} s` : "length unknown";
+}
+
+export function referenceLines(ref) {
+  if (!ref || !Array.isArray(ref.clips)) return [];
+  if (ref.error) return [ref.error];
+  const n = ref.clips.length;
+  const lines = [`Voice copied from ${n} clip${n === 1 ? "" : "s"}` +
+                 (isNum(ref.total_seconds) && n > 1 ? `, ${seconds(ref.total_seconds)} in total` : "") +
+                 ` (setting: ${ref.mode_label || ref.mode}):`];
+  for (const c of ref.clips) lines.push(`${SOURCE_NAMES[c.source] || c.source} · ${c.name} · ${seconds(c.duration_s)}`);
+  return lines;
+}
