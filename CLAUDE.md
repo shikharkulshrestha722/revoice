@@ -40,9 +40,12 @@ frontend/   index.html, style.css
                          ("both" runs sequentially — one shared GPU — and shows timings)
             tracking.js  PURE logic, no DOM (keep it that way so it stays testable):
                          OneEuroFilter, PointerTracker, detectLaserBlob, DwellSelector
-            audio_prep.js PURE: mixToMono, trimSamples, encodeWav16, waveformPeaks,
+            audio_prep.js PURE: mixToMono, trimSamples, resample (Kaiser windowed-sinc, ~90 dB
+                         anti-alias), convertForUpload (mono->trim->resample->WAV, counts
+                         clipping), encodeWav16 (rounded), readWav16, waveformPeaks,
                          speechChunks/speechSecondsInRange, allowed upload extensions
-            metrics_format.js PURE: metrics -> lines under players; moreSimilarEngine()
+            metrics_format.js PURE: metrics -> lines under players; moreSimilarEngine();
+                         referenceLines(voice_reference) -> "Voice copied from..." lines
             selection_stats.js PURE: selections vs letter-by-letter (letters + single
                          spaces), same rule as generation_log.py
             audio_checks.js PURE: analyzeLevels() flags too_quiet / clipping using the
@@ -68,16 +71,30 @@ backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select
                          (XTTS concatenates refs and uses the first gpt_cond_len=30 s).
             uploads (profiles.py): data/profiles/<id>/uploads/NNNNNN.wav + manifest.json
                          (original name, trim, duration, speech_s, consented_by/at + exact
-                         statement). Browser decodes/trims/resamples (audio_prep.js +
-                         OfflineAudioContext) and posts mono 16-bit 24 kHz WAV; server checks
+                         statement). Browser decodes (decodeAudioData), then audio_prep.js
+                         convertForUpload (NOT OfflineAudioContext: untestable) posts mono
+                         16-bit 24 kHz WAV (tests/upload_conversion.test.mjs); server checks
                          consent, extension, 8 MB, WAV format, trim 1-120 s matching length.
-                         /speak voice order: emotion clips > uploads > guided references.
+                         Voice reference per profile (profile.json voice_reference): auto
+                         (emotion clips > uploads > guided) | uploads | recorded | guided.
+                         choose_references() -> (mode, source, refs[{source,name,duration_s,
+                         data}]); a forced mode with nothing raises ProfileError, NEVER a
+                         silent fallback (that bug sent mic clips instead of the upload:
+                         similarity 0.46 vs 0.80). webm_duration() reads MediaRecorder WebM
+                         length from the last block time stamp (no ffmpeg).
+                         /speak replies + logs voice_reference {mode, source, clips, total};
+                         GET /voice_bank/references previews it; POST
+                         /profiles/{id}/voice_reference sets it.
             guided_sentences.py  350 sentences: g001-g150 short phrases, g151-g350 longer
                          (12-20 words, no names/digits/abbreviations; tests enforce it).
                          ~26 min of speech. NEVER renumber; append only. SESSION_SIZE=50.
             generation_log.py    one CSV row per /speak call in data/generation_log.csv
                          (no text stored); summarize() -> /stats/summary and report.py.
                          Savings counted once per utterance_id (latest row).
+                         Also ref_mode, ref_files ("name 18.0s | ..."), ref_seconds, ref_text.
+            parity_check.py      FILE [--profile ID] [--runs N]: same bytes via the Step 4b
+                         request vs generate_speech() (throwaway user in a temp folder), prints
+                         both similarities + md5 of what was sent. F5 varies about +-0.03 per run.
             dataset_export.py    LJSpeech zip: metadata.csv `id|text|text`, no header, "
 "
                          endings; wavs/ (22050 mono) if ffmpeg on PATH, else raw/ webm

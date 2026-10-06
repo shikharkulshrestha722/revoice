@@ -126,7 +126,29 @@ In the Voice Bank section click **Upload old recordings** (or create the user wi
 - Only a clean mono 24 kHz WAV of the kept part is uploaded. Saved clips show their length
   and speech time; under 15 s of speech in total gives a warning.
 - When an emotion has no recorded clip, speech uses the uploaded recordings (both F5-TTS and
-  XTTS), before guided recordings.
+  XTTS), before guided recordings. To use **only** the uploads, set *Voice reference* (below).
+- The conversion (mix to mono, trim, resample to 24 kHz, 16-bit WAV) is our own tested code in
+  `frontend/audio_prep.js`: a 440 Hz tone and a speech-like signal come out with the same
+  pitch, length, level and sample rate (`frontend/tests/upload_conversion.test.mjs`).
+
+## Voice reference: which recordings the voice is copied from
+
+In the Voice Bank, **Voice reference** chooses, per user:
+
+| Setting | Uses |
+|---|---|
+| Auto | clips recorded for the chosen emotion → else uploaded recordings → else guided takes |
+| Uploaded recordings only | only the uploads; if there are none you get an error, never other clips |
+| Recorded clips only | only the clips recorded for the chosen emotion |
+| Guided takes only | only the guided takes chosen as voice references |
+
+The Voice Bank shows which clips the **next** generation will use, and every result shows
+*Voice copied from…* with the source, file name and length of each clip actually sent.
+
+**Website vs Colab Step 4b check.** `py -3.10 parity_check.py <audio file> --profile <user id> --runs 3`
+(in `backend`, with Colab running) sends the same file's exact bytes through the Step 4b
+request and through the website's own code, and prints both similarity scores side by side,
+plus what the website sends for that real user right now.
 
 ## Evidence for the report
 
@@ -135,8 +157,9 @@ In the Voice Bank section click **Upload old recordings** (or create the user wi
   space), and the % saved by predictions. Resets when you press **Clear**.
 - **Generation log**: every *Generate & Speak* adds a line to
   `backend/data/generation_log.csv` (time, engine, emotion, voice source, text length in
-  characters and words, generation time, success/failure, selection counts). The sentence
-  itself is not stored.
+  characters and words, generation time, success/failure, selection counts, and which
+  reference clips were sent: setting, file names + lengths, total length, and F5's
+  transcript of its reference). The sentence itself is not stored.
 - **Voice metrics** (under each player, measured on Colab for every sentence):
   *similarity* to the real voice (speaker-embedding cosine, 0-1, higher = more alike),
   average *pitch* and range, *speaking rate* (words per second of actual speech) and an
