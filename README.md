@@ -138,12 +138,23 @@ In the Voice Bank, **Voice reference** chooses, per user:
 | Setting | Uses |
 |---|---|
 | Auto | clips recorded for the chosen emotion → else uploaded recordings → else guided takes |
-| Uploaded recordings only | only the uploads; if there are none you get an error, never other clips |
+| Uploaded recordings only | only the uploads; if there are none you get an error, never other clips. A second list picks **all uploads** (most speech first) or **one specific clip**; if that clip is deleted you get an error, never another upload |
 | Recorded clips only | only the clips recorded for the chosen emotion |
 | Guided takes only | only the guided takes chosen as voice references |
 
 The Voice Bank shows which clips the **next** generation will use, and every result shows
 *Voice copied from…* with the source, file name and length of each clip actually sent.
+
+**F5 gets one clip, XTTS gets all of them.** F5 copies the voice from a single recording, so
+only that one is sent (uploads: the one with most speech, or your chosen clip; recorded clips:
+the longest). Colab then measures similarity against exactly the clip F5 copied, not against
+other recordings it never heard. XTTS really uses every clip, so it gets them all.
+(Inside that clip, F5 itself uses at most the first ~12 s, while similarity is measured on
+the whole clip. Matching that exactly would need a notebook change, so it's left as is.)
+
+**Test sentence** (next to *Generate & Speak*) speaks the exact sentence Colab's Step 4b uses,
+with neutral emotion and the same request fields, so the website and Step 4b scores are
+directly comparable. It isn't counted as a patient sentence in the selection evidence.
 
 **Website vs Colab Step 4b check.** `py -3.10 parity_check.py <audio file> --profile <user id> --runs 3`
 (in `backend`, with Colab running) sends the same file's exact bytes through the Step 4b

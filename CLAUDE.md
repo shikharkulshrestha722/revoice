@@ -83,8 +83,14 @@ backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select
                          similarity 0.46 vs 0.80). webm_duration() reads MediaRecorder WebM
                          length from the last block time stamp (no ffmpeg).
                          /speak replies + logs voice_reference {mode, source, clips, total};
-                         GET /voice_bank/references previews it; POST
-                         /profiles/{id}/voice_reference sets it.
+                         GET /voice_bank/references?engine= previews it; POST
+                         /profiles/{id}/voice_reference (mode, clip_id) sets it.
+                         profile.reference_clip = one upload id ("" = all); deleted -> error.
+                         app.clips_for_engine: F5 gets ONE clip (uploads/guided: first in
+                         order; emotion clips: longest) so Colab's similarity is measured on
+                         the clip F5 copied; XTTS gets all. Payload = Step 4b's fields exactly
+                         (stock_speaker None, speaker_wav_base64 None, list of clips).
+                         app.js TEST_SENTENCE == notebook Step 4b == parity_check (test enforces).
             guided_sentences.py  350 sentences: g001-g150 short phrases, g151-g350 longer
                          (12-20 words, no names/digits/abbreviations; tests enforce it).
                          ~26 min of speech. NEVER renumber; append only. SESSION_SIZE=50.
