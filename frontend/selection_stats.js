@@ -16,12 +16,14 @@ export function tidyText(text) {
   return (text || "").split(/\s+/).filter(Boolean).join(" ");
 }
 
-export function selectionSavings(selections, text) {
+// typed = (part of) the sentence was typed on a keyboard: typed characters aren't pointer
+// selections, so no "saved" percentage (it would look like a huge saving that isn't real)
+export function selectionSavings(selections, text, typed = false) {
   const sentence = tidyText(text);
   const letterByLetter = sentence.length;                 // letters + single spaces
   const spaces = sentence ? sentence.split(" ").length - 1 : 0;
-  const savedPct = letterByLetter
+  const savedPct = letterByLetter && !typed
     ? Math.round((1000 * (letterByLetter - selections)) / letterByLetter) / 10
     : null;
-  return { selections, letterByLetter, letters: letterByLetter - spaces, spaces, savedPct };
+  return { selections, letterByLetter, letters: letterByLetter - spaces, spaces, savedPct, typed };
 }

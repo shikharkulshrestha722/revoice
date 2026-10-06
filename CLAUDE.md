@@ -47,7 +47,15 @@ frontend/   index.html, style.css
             metrics_format.js PURE: metrics -> lines under players; moreSimilarEngine();
                          referenceLines(voice_reference) -> "Voice copied from..." lines
             selection_stats.js PURE: selections vs letter-by-letter (letters + single
-                         spaces), same rule as generation_log.py
+                         spaces), same rule as generation_log.py; typed=true -> no savedPct
+            compose.js   PURE: the ONE sentence {text, selections, typed}: pointerKey (append,
+                         +1), choosePrediction (replace, +1), typed (exact text, not a
+                         selection), textBoxKeyAction (Ctrl/Cmd+Enter speak, Enter ignored),
+                         isTypingTarget (page shortcuts off in input/select/textarea/
+                         contenteditable), inputMethod pointer|keyboard|mixed. #composedText
+                         is a <textarea>; app.js changes text ONLY via setSentence(). Typed
+                         sentences send no `selections` (excluded from savings), log
+                         input_method.
             audio_checks.js PURE: analyzeLevels() flags too_quiet / clipping using the
                          90th-percentile 10 ms chunk RMS (a start click can't hide a quiet take)
             tests/       node:test tests for the pure JS modules

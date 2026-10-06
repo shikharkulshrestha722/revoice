@@ -34,6 +34,8 @@
 #   ref_text              F5 only: the words Whisper heard in the reference it copied
 #   ref_/out_accent_scores  the 3 most likely accents with RAW scores (-1..1, not %),
 #                         e.g. "indian 0.638; us 0.511; scotland 0.282" (Colab v8+)
+#   input_method          pointer / keyboard / mixed. Typed sentences have no selections,
+#                         so they never count in the "selections saved" summary
 # ============================================================
 
 import csv
@@ -53,7 +55,9 @@ FIELDS = ["timestamp", "utterance_id", "engine", "emotion", "voice_source", "cha
           # which recordings the voice was copied from (added later again)
           "ref_mode", "ref_files", "ref_seconds", "ref_text",
           # accent as raw top-3 scores (Colab v8)
-          "ref_accent_scores", "out_accent_scores"]
+          "ref_accent_scores", "out_accent_scores",
+          # typed with a keyboard, or pointed?
+          "input_method"]
 
 _lock = threading.Lock()   # two requests at once must not mix up their lines
 
@@ -132,7 +136,8 @@ def _upgrade_old_file(path):
 
 def log_generation(path, *, text, engine, emotion, voice_source="", seconds=None,
                    success=False, error="", selections=None, utterance_id="",
-                   synth_seconds=None, metrics=None, voice_reference=None, ref_text=None):
+                   synth_seconds=None, metrics=None, voice_reference=None, ref_text=None,
+                   input_method=""):
     """Appends one row to the CSV (creating it, with a header line, if needed)."""
     clean = tidy(text)
     needed = letter_by_letter_selections(clean)
@@ -153,6 +158,7 @@ def log_generation(path, *, text, engine, emotion, voice_source="", seconds=None
         "synth_seconds": _blank(synth_seconds),
         **metric_columns(metrics),
         **reference_columns(voice_reference, ref_text),
+        "input_method": input_method,
     }
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with _lock:

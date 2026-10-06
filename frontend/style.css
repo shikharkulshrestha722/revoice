@@ -207,6 +207,7 @@ h3 { font-size: var(--text-md); margin: var(--space-4) 0 var(--space-2); }
 }
 
 .hero-label {
+  display: block;                   /* it's a <label> now (for the text box) */
   font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
@@ -224,6 +225,25 @@ h3 { font-size: var(--text-md); margin: var(--space-4) 0 var(--space-2); }
   padding: var(--space-2) 0;
   word-break: break-word;
 }
+/* the composed sentence is also a text box: same big text, just with an input frame */
+textarea.composed-box {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  field-sizing: content;            /* grows with the text where supported */
+  min-height: calc(1.25em + 2 * var(--space-2) + 4px);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 2px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+textarea.composed-box::placeholder { color: var(--text-muted); font-weight: 400; }
+textarea.composed-box:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.type-hint { margin: var(--space-1) 0 0; }
+.prediction-buttons { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+.prediction-buttons[hidden] { display: none; }
 
 .hero-footer {
   display: flex;

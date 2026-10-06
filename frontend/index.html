@@ -78,8 +78,13 @@
 
   <!-- HERO: the sentence the patient is composing (the most important thing on screen) -->
   <section class="hero card" aria-label="Composed sentence">
-    <div class="hero-label">Composed sentence</div>
-    <div id="composedText" class="composed-box" aria-live="polite">&nbsp;</div>
+    <label class="hero-label" for="composedText">Composed sentence</label>
+    <!-- the SAME sentence the pointer builds; it can also be typed (Ctrl+Enter speaks) -->
+    <textarea id="composedText" class="composed-box" rows="1" spellcheck="false" autocomplete="off"
+              placeholder="Point at letters, or type here" aria-describedby="typeHint"></textarea>
+    <p id="typeHint" class="hint type-hint">Typing works too. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> speaks.</p>
+    <!-- predictions as buttons, for mouse/keyboard users (the patient uses the camera overlay) -->
+    <div id="predictionButtons" class="prediction-buttons" aria-label="Predictions" hidden></div>
     <div class="hero-footer">
       <!-- how many pointer selections the predictions saved for this sentence -->
       <p id="selectionStats" class="selection-stats"></p>

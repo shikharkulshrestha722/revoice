@@ -10,6 +10,8 @@
 import { PointerTracker, DwellSelector, detectLaserBlob } from "./tracking.js";
 import { analyzeLevels, PROBLEM_MESSAGES } from "./audio_checks.js";
 import { selectionSavings } from "./selection_stats.js";
+import { emptySentence, pointerKey, choosePrediction, typed, textBoxKeyAction, isTypingTarget,
+         inputMethod } from "./compose.js";
 import { metricsLines, moreSimilarEngine, referenceLines } from "./metrics_format.js";
 import { mixToMono, convertForUpload, waveformPeaks, speechChunks, speechSecondsInRange,
          hasAllowedExtension } from "./audio_prep.js";
@@ -123,7 +125,9 @@ const GRID_LETTERS = [
 ];
 
 // ---------- STATE ----------
-let composedText = "";
+// The composed sentence: { text, selections, typed } (see compose.js). The pointer and
+// the text box change the SAME sentence, always through setSentence() below.
+let sentence = emptySentence();
 let handLandmarker = null;
 let handLoading = false;
 let lastVideoTime = -1;
@@ -484,7 +488,7 @@ function refreshSuggestions() {
 
     try {
       const formData = new FormData();
-      formData.append("text", composedText);
+      formData.append("text", sentence.text);
       const res = await fetch("/predict", {
         method: "POST",
         body: formData,
@@ -493,6 +497,7 @@ function refreshSuggestions() {
       const data = await res.json();
       suggestions = data.suggestions || [];
       suggestionSource = data.source || "";
+      renderPredictionButtons();
     } catch (err) {
       if (err.name !== "AbortError") console.error("prediction failed", err);
     }
@@ -504,14 +509,19 @@ function refreshSuggestions() {
 // with spelling the sentence letter by letter (see selection_stats.js).
 // Each sentence gets a random id so the log counts it once, even if it is
 // spoken twice or with "Compare both".
-let selectionCount = 0;
 let utteranceId = crypto.randomUUID();
 
 function updateSelectionStats() {
   const el = document.getElementById("selectionStats");
-  const s = selectionSavings(selectionCount, composedText);
+  const s = selectionSavings(sentence.selections, sentence.text, sentence.typed);
   if (!s.letterByLetter) {
-    el.textContent = `Selections used: ${selectionCount}`;
+    el.textContent = `Selections used: ${sentence.selections}`;
+    return;
+  }
+  if (s.typed) {
+    // typed characters aren't pointer selections: no (misleading) savings figure
+    el.textContent = `Pointer selections used: ${s.selections} · typed with the keyboard, ` +
+                     "so not counted as prediction savings";
     return;
   }
   el.textContent =
@@ -552,40 +562,60 @@ function drawSelectionFlash(now) {
   ctx.globalAlpha = 1;
 }
 
+// The one place the sentence changes. fromTextBox: the box already shows it (don't
+// rewrite the box while someone types, or the cursor would jump to the end).
+function setSentence(next, { fromTextBox = false } = {}) {
+  if (next === sentence) return;
+  sentence = next;
+  if (!fromTextBox) composedTextEl.value = sentence.text;
+  updateSelectionStats();
+  refreshSuggestions();                   // debounced: waits until typing pauses
+}
+
 function selectCell(cellIndex) {
   flash = { cell: cellIndex, start: performance.now() };
   // suggestion bar
   if (cellIndex >= 1000) {
     const picked = suggestions[cellIndex - 1000];
     if (!picked) { flash = null; return; }
-    selectionCount++;
-    composedText = picked.toUpperCase() + " ";
-    composedTextEl.textContent = composedText;
-    updateSelectionStats();
-    refreshSuggestions();
+    setSentence(choosePrediction(sentence, picked));
     return;
   }
 
   const label = GRID_LETTERS[cellIndex];
   if (!label || label === "_") { flash = null; return; }
-  selectionCount++;
+  setSentence(pointerKey(sentence, label));      // added at the END, even after typed text
+}
 
-  if (label === "SPACE") composedText += " ";
-  else if (label === "DEL") composedText = composedText.slice(0, -1);
-  else composedText += label;
+// ---------- TYPING (caregivers, testing, users who can still type) ----------
+// The text box IS the composed sentence. Pointer selection stays the main input.
+composedTextEl.addEventListener("input", () => {
+  const oneLine = composedTextEl.value.replace(/\r?\n/g, " ");   // pasted text: keep it one line
+  if (oneLine !== composedTextEl.value) composedTextEl.value = oneLine;
+  setSentence(typed(sentence, oneLine), { fromTextBox: true });
+});
+composedTextEl.addEventListener("keydown", (e) => {
+  const action = textBoxKeyAction(e);
+  if (action) e.preventDefault();               // no new line, ever
+  if (action === "speak") document.getElementById("speakBtn").click();
+});
 
-  composedTextEl.textContent = composedText || "\u00A0";
-  updateSelectionStats();
-  refreshSuggestions();
+// The 3 predictions as buttons too, for mouse/keyboard users (the patient picks them on
+// the camera overlay). Picking one replaces the text, exactly like the pointer does.
+function renderPredictionButtons() {
+  const box = document.getElementById("predictionButtons");
+  box.replaceChildren(...suggestions.map((phrase, i) => {
+    const b = document.createElement("button");
+    b.textContent = phrase;
+    b.onclick = () => selectCell(1000 + i);
+    return b;
+  }));
+  box.hidden = suggestions.length === 0;
 }
 
 document.getElementById("clearBtn").onclick = () => {
-  composedText = "";
-  composedTextEl.textContent = "\u00A0";
-  selectionCount = 0;                     // new sentence: start counting again
-  utteranceId = crypto.randomUUID();
-  updateSelectionStats();
-  refreshSuggestions();
+  utteranceId = crypto.randomUUID();      // new sentence: start counting again
+  setSentence(emptySentence());
 };
 
 // ---------- USER PROFILES ----------
@@ -1013,7 +1043,8 @@ function showRefUsed(el, ref, prefix = "") {
 // Asks the backend for speech from ONE engine.
 // Returns { audioSrc, seconds, refText, metrics, voiceReference } or throws an Error with a readable message.
 // counted = false for the Test sentence: it isn't the patient's sentence, so it must
-// not count in the "selections saved" evidence.
+// not count in the "selections saved" evidence. A typed sentence still gets its
+// utterance id and input method, but no selection count (typing isn't pointing).
 async function requestSpeech(engine, text, emotion, counted = true) {
   const formData = new FormData();
   formData.append("text", text);
@@ -1021,8 +1052,9 @@ async function requestSpeech(engine, text, emotion, counted = true) {
   formData.append("engine", engine);
   if (activeProfile) formData.append("profile_id", activeProfile.id);
   if (counted) {
-    formData.append("selections", selectionCount);    // for the generation log
+    if (!sentence.typed) formData.append("selections", sentence.selections);    // for the generation log
     formData.append("utterance_id", utteranceId);
+    formData.append("input_method", inputMethod(sentence));
   }
 
   const start = performance.now();
@@ -1043,7 +1075,7 @@ async function requestSpeech(engine, text, emotion, counted = true) {
 const TEST_SENTENCE = "Hello, this is a quick test of my cloned voice. Does it sound like me?";
 
 document.getElementById("speakBtn").onclick = () =>
-  speak(composedText, document.getElementById("emotion").value, true);
+  speak(sentence.text, document.getElementById("emotion").value, true);
 document.getElementById("testSentenceBtn").onclick = () => speak(TEST_SENTENCE, "neutral", false);
 
 async function speak(text, emotion, counted) {
@@ -1454,9 +1486,9 @@ guidedEl("guidedRefsBtn").onclick = async () => {
 };
 
 // keyboard shortcuts, only while the panel is open and you're not typing in a box
+// (e.g. in the composed-sentence text box: Space there must type a space, not record)
 document.addEventListener("keydown", (e) => {
-  const typing = e.target instanceof Element && e.target.matches("input, select, textarea");
-  if (guidedEl("guidedPanel").hidden || typing) return;
+  if (guidedEl("guidedPanel").hidden || isTypingTarget(e.target)) return;
   if (e.code === "Space") { e.preventDefault(); toggleGuidedRecording(); }
   else if (e.key === "ArrowRight") skipGuided();
   else if (e.key === "ArrowLeft") goToGuided(guided.index - 1);

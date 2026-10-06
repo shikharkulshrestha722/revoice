@@ -93,6 +93,16 @@ node --test "frontend/tests/*.test.mjs"
      .webm clips and the Colab fine-tuning notebook converts them.
 6. Pick a voice engine — **F5-TTS** (default), **XTTS-v2**, or **Compare both** (generates with
    each, one after the other, and shows how long each took) — then **Generate & Speak**.
+7. **Typing** (caregivers, testing, or a user who can still type): the composed sentence is
+   also a text box. Typing and pointing edit the SAME sentence: typing changes it, pointer
+   letters are added at the end, a prediction (on the camera overlay, or as a button under
+   the box) replaces it, and **Clear** empties it. Predictions update as you type.
+   <kbd>Ctrl</kbd>+<kbd>Enter</kbd> speaks; plain <kbd>Enter</kbd> does nothing. While the
+   box has focus, page shortcuts (like <kbd>Space</kbd> to record in guided banking) are off.
+   Typed text is spoken exactly like pointed text (same clean-up, emotion, engine and voice
+   reference). Typed characters aren't pointer selections, so a typed sentence shows its
+   pointer selections but no "saved by prediction" percentage, and the log marks it
+   `keyboard`/`mixed` so it never counts in the savings summary.
 
 ## Look and feel
 

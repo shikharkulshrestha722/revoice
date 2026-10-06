@@ -349,6 +349,8 @@ async def export_dataset(profile_id: str):
     )
 
 
+INPUT_METHODS = ("pointer", "keyboard", "mixed")     # how the sentence was entered (for the log)
+
 # Voice engines the Colab notebook understands:
 #   "xtts" = XTTS-v2 (default), "f5" = F5-TTS
 SUPPORTED_ENGINES = ("xtts", "f5")
@@ -356,11 +358,14 @@ SUPPORTED_ENGINES = ("xtts", "f5")
 
 @app.post("/speak")
 def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("xtts"),
-                profile_id: str = Form(""), selections: str = Form(""), utterance_id: str = Form("")):
+                profile_id: str = Form(""), selections: str = Form(""), utterance_id: str = Form(""),
+                input_method: str = Form("")):
     """
     Generates speech (see generate_speech below) and writes one line to
     data/generation_log.csv for EVERY call, whether it worked or not.
-    selections / utterance_id come from the page's selection counter.
+    selections / utterance_id come from the page's selection counter; input_method says
+    whether the sentence was pointed (pointer), typed (keyboard) or both (mixed).
+    The text is spoken exactly the same way however it was entered.
     """
     info = {}            # generate_speech fills in voice_source, voice_reference and seconds
     try:
@@ -376,6 +381,7 @@ def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("x
         success=not error, error=error,
         selections=int(selections) if selections.strip().isdigit() else None,
         utterance_id=utterance_id[:40],
+        input_method=input_method if input_method in INPUT_METHODS else "",
         synth_seconds=reply.get("synth_seconds"), metrics=reply.get("metrics"),
         voice_reference=info.get("voice_reference"), ref_text=reply.get("ref_text"),
     )
