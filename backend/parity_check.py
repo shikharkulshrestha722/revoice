@@ -1,30 +1,5 @@
-# ============================================================
-# ReVoice — Parity check: website path vs Colab "Step 4b" path
-# ============================================================
-# Sends the EXACT bytes of one audio file to Colab two ways and prints
-# both similarity scores side by side:
-#
-#   Step 4b path   the same request the notebook's Step 4b cell builds
-#                  (one clip, the fixed test sentence), sent straight to Colab
-#   Website path   the backend's real /speak code (generate_speech): a throwaway
-#                  user whose ONLY voice is this file, in a temporary folder
-#                  (your real users and recordings are not touched)
-#   Your profile   (optional, --profile) what the website would send for a real
-#                  user right now, with their current "Voice reference" setting
-#
-# If the first two rows send identical bytes (same md5) but get very different
-# scores, the difference is random variation in F5; run with --runs 3 to average.
-# If the "Your profile" row sends different clips, that's why the website sounds
-# different.
-#
-# Needs the Colab notebook running (Step 6). Run from the backend folder:
-#   py -3.10 parity_check.py "C:\path\to\Recording (2).m4a"
-#   py -3.10 parity_check.py data\profiles\shikhar-0d4e\uploads\000001.wav --profile shikhar-0d4e --runs 3
-#
-# Tip: an uploaded clip is stored as the WAV the BROWSER made from the original file.
-# Run the script on the original AND on that WAV: if those two agree, the browser
-# conversion didn't change the voice.
-# ============================================================
+"""Sends the same audio file through Colab's Step 4b request and the website's /speak code,
+and prints both similarity scores. Usage: py -3.10 parity_check.py FILE [--profile ID] [--runs N]"""
 
 import argparse
 import base64
@@ -38,12 +13,12 @@ from pathlib import Path
 import app as backend
 from profiles import ProfileError, ProfileStore
 
-# exactly the sentence Step 4b uses
+# must match the notebook's Step 4b (a test checks this)
 TEST_SENTENCE = "Hello, this is a quick test of my cloned voice. Does it sound like me?"
 
 
 def md5_of_clips(clips_b64):
-    """Fingerprint of the reference audio actually sent (decoded bytes, in order)."""
+    """md5 of the reference audio sent (decoded bytes, in order)."""
     h = hashlib.md5()
     for c in clips_b64:
         h.update(base64.b64decode(c))
@@ -66,7 +41,7 @@ def send_like_step_4b(data: bytes, engine: str) -> tuple:
 
 
 def send_like_website(store: ProfileStore, profile_id: str, engine: str) -> tuple:
-    """The backend's real /speak code, capturing exactly what it sends to Colab."""
+    """Runs the backend's /speak code and captures exactly what it sends to Colab."""
     captured = {}
     real_call = backend.call_colab
 
@@ -80,15 +55,14 @@ def send_like_website(store: ProfileStore, profile_id: str, engine: str) -> tupl
         result = backend.generate_speech(TEST_SENTENCE, "neutral", engine, profile_id, info)
     finally:
         backend.store, backend.call_colab = old_store, real_call
-    if not isinstance(result, dict):                    # a JSONResponse = an error
+    if not isinstance(result, dict):                    # a JSONResponse is an error
         raise RuntimeError(result.body.decode()[:300])
     return captured["payload"], result
 
 
 def throwaway_user(store: ProfileStore, path: Path, data: bytes) -> str:
-    """A user whose only voice is this file: as an uploaded recording if it's the kind
-    of WAV the website uploads, otherwise as a recorded clip (sent as-is, like
-    browser recordings)."""
+    """A user whose only voice is this file: an upload if it's a WAV the website accepts,
+    otherwise a recorded clip (sent as-is)."""
     p = store.create("Parity check", "cloned", consent_given=True)
     try:
         with wave.open(str(path)) as w:
@@ -107,7 +81,7 @@ def run(label, send, runs):
     for i in range(runs):
         try:
             payload, reply = send()
-        except Exception as e:                           # keep going: show the other rows
+        except Exception as e:                           # still show the other rows
             print(f"  {label}: FAILED - {e}")
             return None
         metrics = reply.get("metrics") or {}

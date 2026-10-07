@@ -1,14 +1,4 @@
-# ============================================================
-# ReVoice — Backend
-# ============================================================
-# This is the "messenger" between the webpage and Colab.
-# Its jobs:
-#   1. Serve the frontend webpage
-#   2. Manage user profiles and save their voice recordings on disk
-#   3. Forward text + the user's voice to the Colab API, and
-#      pass the generated audio back to the webpage
-#   4. Ask Gemini for phrase predictions
-# ============================================================
+"""ReVoice backend: serves the page, stores profiles and recordings, and relays to Gemini and Colab."""
 
 from fastapi import FastAPI, UploadFile, Form, Request
 from fastapi.responses import JSONResponse, FileResponse, Response
@@ -27,19 +17,13 @@ from guided_sentences import GUIDED_SENTENCES, SESSION_SIZE
 from dataset_export import build_dataset_zip
 from generation_log import log_generation, summarize
 
-# ------------------------------------------------------------
-# SETTINGS come from backend/.env (copy .env.example to .env).
-# Keeping keys in .env means they never end up in git.
-# Real environment variables win over .env if both are set.
-# ------------------------------------------------------------
+# Settings come from backend/.env (kept out of git); real environment variables win.
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-# Public URL of the Colab voice server (ngrok). Our free ngrok domain is
-# static, so this normally never changes.
+# Static ngrok domain of the Colab voice server.
 COLAB_API_URL = os.environ.get("COLAB_API_URL", "https://handcart-retrieval-mulch.ngrok-free.dev")
 
-# Gemini API key for phrase prediction (free key: https://aistudio.google.com/apikey).
-# If it's blank, prediction still works using an offline word list.
+# Without a key, predictions use the offline word list.
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
@@ -47,13 +31,8 @@ app = FastAPI()
 
 
 def call_colab(method: str, path: str, **kwargs):
-    """
-    Sends a request to the Colab voice server (through ngrok).
-    If the CONNECTION fails (dropped connection, SSL hiccup on the tunnel) we wait
-    a second and try ONE more time. We do NOT retry when Colab replies with an
-    error (e.g. HTTP 500) or takes too long to answer: it would fail the same way,
-    or do the same slow work twice on the GPU.
-    """
+    """Sends a request to Colab through ngrok.
+    Retries once only on a dropped connection; an error reply or timeout would just repeat slow GPU work."""
     send = requests.post if method == "post" else requests.get
     url = f"{COLAB_API_URL.rstrip('/')}{path}"
     headers = {"ngrok-skip-browser-warning": "true"}   # skips ngrok's free-tier warning page
@@ -65,11 +44,7 @@ def call_colab(method: str, path: str, **kwargs):
         return send(url, headers=headers, **kwargs)
 
 
-# ------------------------------------------------------------
-# NO-CACHE for the webpage files.
-# Without this the browser sometimes keeps running an OLD app.js
-# after we edit it. API replies are left alone.
-# ------------------------------------------------------------
+# Page files are sent with no-cache so the browser never runs a stale app.js.
 API_PATHS = ("/predict", "/speak", "/upload_voice_clip", "/voice_bank",
              "/profiles", "/stock_speakers", "/guided", "/stats", "/uploads")
 
@@ -104,57 +79,47 @@ def call_gemini(prompt: str) -> str:
 
 
 def prepare_text_for_speech(text: str, emotion: str = "neutral") -> str:
-    """
-    XTTS reads ALL CAPS badly (shouting, or spelling letters out).
-    Convert to normal sentence case and make sure it ends with punctuation,
-    which also gives the model better prosody.
-    """
-    text = " ".join(text.split())          # tidy spacing
+    """Converts ALL CAPS to sentence case and adds end punctuation (XTTS reads caps badly)."""
+    text = " ".join(text.split())
     if not text:
         return text
 
-    # only lowercase if it's mostly caps (don't ruin text the user typed properly)
+    # only lowercase mostly-caps text, so properly typed text is kept
     letters = [c for c in text if c.isalpha()]
     if letters and sum(c.isupper() for c in letters) / len(letters) > 0.8:
         text = text.lower()
 
-    text = text[0].upper() + text[1:]      # capitalise first letter
-    text = re.sub(r"\bi\b", "I", text)     # standalone "i" -> "I"
+    text = text[0].upper() + text[1:]
+    text = re.sub(r"\bi\b", "I", text)
 
-    # punctuation strongly shapes XTTS delivery, so match it to the emotion
+    # punctuation shapes the delivery, so it follows the emotion
     if text[-1] not in ".!?":
         text += "!" if emotion in ("urgent", "happy") else "."
     return text
 
 
-# NOTE: endpoints that wait for Colab or Gemini are plain "def", not "async def".
-# FastAPI then runs each one on its own worker thread, so a 30-second speech
-# generation doesn't freeze everything else (like the prediction bar).
+# Endpoints that wait for Colab or Gemini are plain `def`: FastAPI runs them on a worker
+# thread, so a long generation doesn't block other requests such as predictions.
 @app.post("/predict")
 def predict(text: str = Form("")):
-    """Suggests 3 likely sentences based on what has been typed so far."""
+    """Suggests 3 likely sentences for the text so far."""
     key_is_set = bool(GEMINI_API_KEY) and not GEMINI_API_KEY.startswith("PASTE_")
     result = get_suggestions(text, call_gemini=call_gemini if key_is_set else None)
     return result
 
 
-# ------------------------------------------------------------
-# USER PROFILES + VOICE BANK (saved on disk, see profiles.py)
-# ------------------------------------------------------------
-# Data folder can be moved with REVOICE_DATA_DIR in .env; default is backend/data
+# Data folder can be moved with REVOICE_DATA_DIR; default is backend/data.
 DATA_DIR = os.environ.get("REVOICE_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
 store = ProfileStore(DATA_DIR)
-GENERATION_LOG = os.path.join(DATA_DIR, "generation_log.csv")   # one line per /speak call
+GENERATION_LOG = os.path.join(DATA_DIR, "generation_log.csv")
 
-# Used only if Colab is offline when the "Add user" panel asks for the list.
-# The live list comes from the Colab notebook (GET /speakers).
+# Used only when Colab is offline; the live list comes from Colab's /speakers.
 FALLBACK_STOCK_SPEAKERS = [
     "Ana Florence", "Claribel Dervla", "Daisy Studious", "Gracie Wise",
     "Andrew Chipper", "Craig Gutsy", "Damien Black", "Viktor Eka",
 ]
 
 
-# Turn our own errors into clear messages for the web page
 @app.exception_handler(ProfileError)
 async def profile_error(request: Request, exc: ProfileError):
     return JSONResponse({"error": str(exc)}, status_code=400)
@@ -166,7 +131,7 @@ async def profile_not_found(request: Request, exc: ProfileNotFound):
 
 
 def resolve_profile(profile_id: str = "") -> dict:
-    """The profile a request is about: the one named, or else the selected one."""
+    """The named profile, or else the selected one."""
     profile_id = profile_id or store.active_id()
     if not profile_id:
         raise ProfileError("No user selected. Click '+ Add user' first.")
@@ -186,7 +151,7 @@ async def create_profile(
     stock_speaker: str = Form(""),
     consent_given: bool = Form(False),
 ):
-    """Adds a user and selects them straight away."""
+    """Adds a user and selects them."""
     profile = store.create(name, voice_type, stock_speaker, consent_given)
     store.select(profile["id"])
     print(f"[profiles] created {profile['id']} ({voice_type})")
@@ -200,11 +165,7 @@ async def select_profile(profile_id: str):
 
 @app.delete("/profiles/{profile_id}")
 def delete_profile(profile_id: str):
-    """
-    Deletes a user and ALL their recordings from disk.
-    Also asks Colab to forget any voice it built from their clips
-    (best effort: if Colab is offline, its memory is wiped on restart anyway).
-    """
+    """Deletes a user and all their recordings, and asks Colab to forget cached voices (best effort)."""
     store.delete(profile_id)
     print(f"[profiles] deleted {profile_id}")
     try:
@@ -217,7 +178,7 @@ def delete_profile(profile_id: str):
 
 @app.get("/stock_speakers")
 def stock_speakers():
-    """Built-in XTTS voices, for patients who have no healthy voice left to bank."""
+    """Built-in XTTS voices, for patients with no healthy voice left to bank."""
     try:
         r = call_colab("get", "/speakers", timeout=8)
         r.raise_for_status()
@@ -232,7 +193,7 @@ def stock_speakers():
 @app.post("/upload_voice_clip")
 async def upload_voice_clip(emotion: str = Form(...), file: UploadFile = None,
                             profile_id: str = Form("")):
-    """Receives a recorded voice sample and saves it in the user's voice bank on disk."""
+    """Saves a recorded voice clip for one emotion."""
     if file is None:
         raise ProfileError("No audio file was sent.")
     profile = resolve_profile(profile_id)
@@ -243,17 +204,13 @@ async def upload_voice_clip(emotion: str = Form(...), file: UploadFile = None,
 
 @app.get("/voice_bank")
 async def voice_bank_status(profile_id: str = ""):
-    """How many clips the user has for each emotion (used by the web page)."""
+    """Number of clips per emotion."""
     if not (profile_id or store.active_id()):
         return {}
     return resolve_profile(profile_id)["clip_counts"]
 
 
-# ------------------------------------------------------------
-# GUIDED VOICE BANKING
-# The person reads sentences one by one; each clip is saved with
-# its exact words (training data for fine-tuning, see Phase 3).
-# ------------------------------------------------------------
+# Guided voice banking: one clip per sentence, saved with its exact words.
 @app.get("/guided/sentences")
 async def guided_sentences():
     return {"sentences": [{"id": sid, "text": text} for sid, text in GUIDED_SENTENCES],
@@ -262,14 +219,14 @@ async def guided_sentences():
 
 @app.get("/guided/status")
 async def guided_status(profile_id: str = ""):
-    """Progress, total minutes, and which sentence to show next (resume later)."""
+    """Progress, total length, and the next sentence to record."""
     return store.guided_status(resolve_profile(profile_id)["id"])
 
 
 @app.post("/guided/record")
 async def guided_record(sentence_id: str = Form(...), duration_s: float = Form(...),
                         file: UploadFile = None, profile_id: str = Form("")):
-    """Saves one guided recording. Recording the same sentence again = Redo."""
+    """Saves one guided recording; recording a sentence again replaces it."""
     if file is None:
         raise ProfileError("No audio file was sent.")
     profile = resolve_profile(profile_id)
@@ -293,7 +250,7 @@ async def guided_audio(sentence_id: str, profile_id: str = ""):
 
 @app.post("/guided/references")
 async def guided_use_as_references(profile_id: str = Form("")):
-    """Use the best guided recordings as voice references for cloning."""
+    """Uses the best guided recordings as voice references."""
     pid = resolve_profile(profile_id)["id"]
     store.pick_references(pid)
     return store.guided_status(pid)
@@ -306,12 +263,7 @@ async def guided_clear_references(profile_id: str = ""):
     return store.guided_status(pid)
 
 
-# ------------------------------------------------------------
-# UPLOADED OLD RECORDINGS
-# For someone who has already lost their voice: old voice notes or videos.
-# The browser decodes the file, the caregiver trims out other people's
-# voices, and the browser sends a clean mono WAV of just that part.
-# ------------------------------------------------------------
+# Uploaded old recordings: the browser decodes and trims them and sends a mono WAV.
 @app.get("/uploads")
 async def list_uploads(profile_id: str = ""):
     return store.list_uploads(resolve_profile(profile_id)["id"])
@@ -322,7 +274,7 @@ async def upload_recording(file: UploadFile = None, profile_id: str = Form(""),
                            original_name: str = Form(""), start_s: float = Form(...),
                            end_s: float = Form(...), speech_s: float = Form(0.0),
                            consent: bool = Form(False), consented_by: str = Form("")):
-    """Saves one trimmed clip (checked in profiles.add_upload) and returns the updated list."""
+    """Saves one trimmed clip (validated in profiles.add_upload) and returns the updated list."""
     if file is None:
         raise ProfileError("No audio file was sent.")
     pid = resolve_profile(profile_id)["id"]
@@ -349,10 +301,9 @@ async def export_dataset(profile_id: str):
     )
 
 
-INPUT_METHODS = ("pointer", "keyboard", "mixed")     # how the sentence was entered (for the log)
+INPUT_METHODS = ("pointer", "keyboard", "mixed")
 
-# Voice engines the Colab notebook understands:
-#   "xtts" = XTTS-v2 (default), "f5" = F5-TTS
+# Engines the Colab notebook understands.
 SUPPORTED_ENGINES = ("xtts", "f5")
 
 
@@ -360,20 +311,15 @@ SUPPORTED_ENGINES = ("xtts", "f5")
 def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("xtts"),
                 profile_id: str = Form(""), selections: str = Form(""), utterance_id: str = Form(""),
                 input_method: str = Form("")):
-    """
-    Generates speech (see generate_speech below) and writes one line to
-    data/generation_log.csv for EVERY call, whether it worked or not.
-    selections / utterance_id come from the page's selection counter; input_method says
-    whether the sentence was pointed (pointer), typed (keyboard) or both (mixed).
-    The text is spoken exactly the same way however it was entered.
-    """
-    info = {}            # generate_speech fills in voice_source, voice_reference and seconds
+    """Generates speech and logs one row per call, successful or not.
+    Typed and pointed text are spoken the same way; input_method is only logged."""
+    info = {}            # filled by generate_speech: voice_source, voice_reference, seconds
     try:
         result = generate_speech(text, emotion, engine, profile_id, info)
         error = json.loads(result.body)["error"] if isinstance(result, JSONResponse) else ""
-    except Exception as e:                # e.g. no user selected; logged, then shown as usual
+    except Exception as e:                # logged here, then raised to the normal error handler
         result, error = e, str(e)
-    reply = result if isinstance(result, dict) else {}   # Colab's reply when it worked
+    reply = result if isinstance(result, dict) else {}
 
     log_generation(
         GENERATION_LOG, text=text, engine=engine, emotion=emotion,
@@ -391,11 +337,7 @@ def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("x
 
 
 def generate_speech(text, emotion, engine, profile_id, info):
-    """
-    Takes the composed sentence + chosen emotion, finds the user's
-    voice (their recordings, or a stock voice), and asks the Colab API
-    to generate speech with the chosen engine.
-    """
+    """Finds the user's voice (recordings or stock voice) and asks Colab to speak the text."""
     if engine not in SUPPORTED_ENGINES:
         return JSONResponse(
             {"error": f"Unknown engine '{engine}'. Use one of: {', '.join(SUPPORTED_ENGINES)}."},
@@ -407,12 +349,11 @@ def generate_speech(text, emotion, engine, profile_id, info):
     payload = {
         "text": spoken_text,
         "language": "en",
-        "emotion": emotion,                      # lets Colab adjust speed/expressiveness
-        "engine": engine,                        # which voice model Colab should use
+        "emotion": emotion,
+        "engine": engine,
     }
 
     if profile["voice_type"] == "stock":
-        # stock voice: no recordings, Colab uses one of XTTS's built-in speakers
         if engine != "xtts":
             return JSONResponse(
                 {"error": "Stock voices only work with XTTS-v2 (F5-TTS needs a recorded voice)."},
@@ -422,16 +363,13 @@ def generate_speech(text, emotion, engine, profile_id, info):
         info["voice_source"] = "stock"
         print(f"[speak:{engine}] {text!r} -> {spoken_text!r} with stock voice {profile['stock_speaker']!r}")
     else:
-        # Which recordings to copy the voice from: the user's "Voice reference" setting
-        # (Auto = clips recorded for this emotion > uploaded old recordings > guided takes).
-        # Raises a clear error if the chosen kind has none (never a silent swap).
+        # Follows the Voice reference setting; raises instead of silently using other clips.
         mode, source, refs = store.choose_references(profile["id"], emotion)
         refs = clips_for_engine(engine, refs)
         info["voice_source"] = source
         info["voice_reference"] = voice_reference_info(mode, source, refs, engine)
         clips = [base64.b64encode(r["data"]).decode("utf-8") for r in refs]
-        # exactly the fields Colab's Step 4b test sends (it has no stock voice and
-        # puts every clip in the list), so website and Step 4b results are comparable
+        # Same fields as Colab's Step 4b test, so the two scores are comparable.
         payload["stock_speaker"] = None
         payload["speaker_wav_base64"] = None
         payload["speaker_wav_base64_list"] = clips
@@ -440,38 +378,34 @@ def generate_speech(text, emotion, engine, profile_id, info):
 
     start = time.perf_counter()
     try:
-        # first generation on Colab can take 20-30 seconds
+        # the first generation on Colab can take 20-30 seconds
         response = call_colab("post", "/synthesize", json=payload, timeout=120)
     except requests.exceptions.RequestException as e:
         info["seconds"] = time.perf_counter() - start
         return JSONResponse({"error": f"Could not reach Colab API: {e}"}, status_code=502)
 
-    info["seconds"] = time.perf_counter() - start    # generation time, including the network
+    info["seconds"] = time.perf_counter() - start    # includes the network
 
-    # If Colab returned an error, show WHAT went wrong instead of just the status code
     if response.status_code != 200:
         try:
             detail = response.json().get("error", response.text[:500])
         except ValueError:
             detail = response.text[:500]
-        print(f"[Colab error {response.status_code}] {detail}")   # also shows in your terminal
+        print(f"[Colab error {response.status_code}] {detail}")
         return JSONResponse(
             {"error": f"Colab said: {detail}"},
             status_code=502,
         )
 
-    reply = response.json()    # {"audio_base64": "...", metrics...} goes straight to the browser,
-    if "voice_reference" in info:          # plus exactly which recordings were sent
+    reply = response.json()
+    if "voice_reference" in info:          # tell the page exactly which recordings were sent
         reply["voice_reference"] = info["voice_reference"]
     return reply
 
 
 def clips_for_engine(engine, refs):
-    """F5 copies the voice from ONE clip. If we sent several, Colab would pick the longest
-    by itself AND measure similarity against all of them joined together, i.e. partly
-    against audio F5 never heard. So F5 gets just one clip: the first in our order
-    (uploads: most speech first; guided: longest first), or for recorded emotion clips
-    the longest. XTTS really uses all the clips, so it gets all of them."""
+    """F5 copies one clip, so it gets only that one (Colab measures similarity against every clip sent);
+    XTTS uses all clips. F5's clip: first in order, or the longest recorded emotion clip."""
     if engine != "f5" or len(refs) <= 1:
         return refs
     if refs[0]["source"] == "emotion_clips":
@@ -480,7 +414,7 @@ def clips_for_engine(engine, refs):
 
 
 def voice_reference_info(mode, source, refs, engine="") -> dict:
-    """What the page shows (and the log records) about the recordings sent to Colab."""
+    """Which recordings were sent, for the page and the log."""
     return {
         "mode": mode,
         "mode_label": REFERENCE_MODES[mode],
@@ -493,15 +427,13 @@ def voice_reference_info(mode, source, refs, engine="") -> dict:
 
 @app.post("/profiles/{profile_id}/voice_reference")
 async def set_voice_reference(profile_id: str, mode: str = Form(...), clip_id: str = Form("")):
-    """Caregiver setting: which recordings to copy the voice from (see REFERENCE_MODES);
-    with "uploads", clip_id can pick one specific uploaded clip."""
+    """Sets which recordings to copy the voice from; with "uploads", clip_id picks one clip."""
     return store.set_voice_reference(profile_id, mode, clip_id)
 
 
 @app.get("/voice_bank/references")
 async def preview_references(emotion: str = "neutral", profile_id: str = "", engine: str = "f5"):
-    """Which recordings the NEXT /speak would send, so the page can show it before
-    generating. Returns {"error": ...} (status 200) when the setting can't be met."""
+    """Which recordings the next /speak would send; {"error": ...} if the setting can't be met."""
     profile = resolve_profile(profile_id)
     if profile["voice_type"] == "stock":
         return {"mode": "stock", "clips": []}
@@ -515,13 +447,10 @@ async def preview_references(emotion: str = "neutral", profile_id: str = "", eng
 
 @app.get("/stats/summary")
 async def stats_summary():
-    """Average generation time per engine and selections saved (from the log)."""
+    """Generation time per engine and selections saved, from the log."""
     return summarize(GENERATION_LOG)
 
 
-# ------------------------------------------------------------
-# Serve the frontend folder itself (must be LAST so it doesn't
-# override the API routes above)
-# ------------------------------------------------------------
+# Mounted last so it doesn't shadow the API routes.
 frontend_path = os.path.join(os.path.dirname(__file__), "..", "frontend")
 app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")

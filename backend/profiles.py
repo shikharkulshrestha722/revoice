@@ -1,21 +1,5 @@
-# ============================================================
-# ReVoice — User profiles + voice bank saved on disk
-# ============================================================
-# Each user (patient, or a demo volunteer) gets a folder:
-#
-#   data/profiles/<profile_id>/
-#       profile.json          name, voice type, consent, date created
-#       clips/<emotion>/      their recorded voice clips (newest 3 kept)
-#       guided/               guided voice banking: one clip per sentence +
-#                             manifest.json with the exact words of each
-#       uploads/              old recordings uploaded for someone who lost their
-#                             voice (+ manifest.json: trims, who consented, when)
-#
-# The currently selected user is remembered in data/settings.json,
-# so everything survives a backend restart.
-#
-# Deleting a profile removes its whole folder: recordings included.
-# ============================================================
+"""User profiles and their recordings on disk: data/profiles/<id>/ holds profile.json,
+clips/<emotion>/, guided/ and uploads/; data/settings.json remembers the selected user."""
 
 import io
 import json
@@ -32,29 +16,28 @@ EMOTIONS = ("neutral", "happy", "urgent", "tender")
 VOICE_TYPES = ("cloned", "stock")
 MAX_CLIPS_PER_EMOTION = 3
 
-# Profile ids end up in folder paths, so only allow safe characters.
-# This stops tricks like "../../windows" reaching other folders.
+# Ids become folder names, so only safe characters (blocks paths like "../../windows").
 SAFE_ID = re.compile(r"^[a-z0-9-]{1,64}$")
 AUDIO_EXTENSIONS = (".webm", ".wav", ".ogg", ".mp3", ".m4a")
 
 
-# ---- uploaded old recordings (decoded, trimmed and converted to WAV in the browser) ----
+# Uploaded old recordings (the browser converts them to WAV).
 UPLOAD_EXTENSIONS = {".mp3", ".m4a", ".wav", ".ogg", ".opus", ".webm", ".mp4"}   # original file types
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024    # per clip; 2 minutes of 24 kHz mono WAV is about 5.5 MB
 MIN_CLIP_SECONDS = 1.0
 MAX_CLIP_SECONDS = 120.0
 MAX_UPLOADED_CLIPS = 20
-MIN_TOTAL_SPEECH_SECONDS = 15.0       # less than this: cloning will probably sound poor
+MIN_TOTAL_SPEECH_SECONDS = 15.0       # below this, cloning will probably sound poor
 UPLOAD_CONSENT_STATEMENT = ("I am this person or their family/legal guardian and "
                             "have the right to use these recordings.")
 
 
 class ProfileError(ValueError):
-    """A problem the user can fix (bad name, missing consent...). Shown as a 400 error."""
+    """A problem the user can fix; shown as a 400 error."""
 
 
 class ProfileNotFound(LookupError):
-    """No profile with that id. Shown as a 404 error."""
+    """Unknown profile or clip; shown as a 404 error."""
 
 
 def wav_duration(data: bytes) -> float:
@@ -69,7 +52,7 @@ def wav_duration(data: bytes) -> float:
     return frames / rate
 
 
-# ---- which recordings /speak copies the voice from ("Voice reference" in the Voice Bank) ----
+# "Voice reference" setting: which recordings /speak copies the voice from.
 REFERENCE_MODES = {
     "auto": "Auto",                              # emotion clips > uploads > guided takes
     "uploads": "Uploaded recordings only",
@@ -80,7 +63,7 @@ REFERENCE_MODES = {
 
 def _ebml_number(data: bytes, i: int, keep_marker=False):
     """Reads one EBML variable-length number (WebM's building block).
-    Returns (value, how many bytes it used, whether it means "unknown size")."""
+    Returns (value, bytes used, whether it means "unknown size")."""
     first = data[i]
     length, mask = 1, 0x80
     while length <= 8 and not first & mask:
@@ -97,9 +80,8 @@ def _ebml_number(data: bytes, i: int, keep_marker=False):
 
 
 def webm_duration(data: bytes):
-    """Length in seconds of a browser (MediaRecorder) WebM recording, or None.
-    Browsers don't write the length into the file, so we read the time stamp of
-    the last block of audio (accurate to ~20 ms, one Opus frame)."""
+    """Length in seconds of a MediaRecorder WebM, or None.
+    Browsers don't store the length, so it's read from the last audio block's time stamp (~20 ms)."""
     scale_ns, cluster_ms, last_ms = 1_000_000, 0, None
     containers = {0x18538067, 0x1F43B675, 0x1549A966, 0xA0}   # Segment, Cluster, Info, BlockGroup
     i = 0
@@ -110,13 +92,13 @@ def webm_duration(data: bytes):
             size, n, unknown = _ebml_number(data, i)
             i += n
             if element in containers:
-                continue                                    # step INTO it
+                continue                                    # step into it
             body = data[i:i + size]
             if element == 0x2AD7B1:                         # TimecodeScale
                 scale_ns = int.from_bytes(body, "big")
-            elif element == 0xE7:                           # Cluster time stamp
+            elif element == 0xE7:                           # Cluster timecode
                 cluster_ms = int.from_bytes(body, "big")
-            elif element in (0xA3, 0xA1):                   # a block of audio
+            elif element in (0xA3, 0xA1):                   # SimpleBlock / Block
                 _, tn, _ = _ebml_number(data, i)
                 block_ms = cluster_ms + int.from_bytes(data[i + tn:i + tn + 2], "big", signed=True)
                 last_ms = block_ms if last_ms is None else max(last_ms, block_ms)
@@ -124,7 +106,7 @@ def webm_duration(data: bytes):
                 break
             i += size
     except (ValueError, IndexError):
-        pass                                                # damaged file: use what we found
+        pass                                                # damaged file: use what was read
     return None if last_ms is None else round(last_ms * scale_ns / 1e9 + 0.02, 2)
 
 
@@ -143,7 +125,7 @@ def clip_duration(path: Path):
 
 
 def make_profile_id(name: str) -> str:
-    """'Mr Sharma' -> 'mr-sharma-3fa2' (readable, plus a random part so ids never clash)."""
+    """'Mr Sharma' -> 'mr-sharma-3fa2': readable, with a random suffix so ids never clash."""
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] or "user"
     return f"{slug}-{secrets.token_hex(2)}"
 
@@ -155,7 +137,6 @@ class ProfileStore:
         self.settings_file = self.data_dir / "settings.json"
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---------- helpers ----------
     def _folder(self, profile_id: str) -> Path:
         if not isinstance(profile_id, str) or not SAFE_ID.match(profile_id):
             raise ProfileNotFound(f"No profile '{profile_id}'.")
@@ -178,7 +159,7 @@ class ProfileStore:
     def _write_settings(self, settings: dict):
         self.settings_file.write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
-    # ---------- profiles ----------
+    # Profiles
     def create(self, name: str, voice_type: str = "cloned", stock_speaker: str = "",
                consent_given: bool = False) -> dict:
         name = " ".join((name or "").split())
@@ -189,7 +170,6 @@ class ProfileStore:
         if voice_type not in VOICE_TYPES:
             raise ProfileError("Voice type must be 'cloned' or 'stock'.")
         if voice_type == "cloned" and not consent_given:
-            # we are copying a real person's voice: they must agree first
             raise ProfileError("Consent is required before cloning someone's voice.")
         if voice_type == "stock" and not stock_speaker:
             raise ProfileError("Please choose a stock voice.")
@@ -213,14 +193,14 @@ class ProfileStore:
     def get(self, profile_id: str) -> dict:
         folder = self._folder(profile_id)
         profile = json.loads((folder / "profile.json").read_text(encoding="utf-8"))
-        profile.setdefault("voice_reference", "auto")     # older profiles don't have it yet
-        profile.setdefault("reference_clip", "")          # one chosen uploaded clip, "" = all uploads
+        profile.setdefault("voice_reference", "auto")     # older profiles don't have it
+        profile.setdefault("reference_clip", "")          # one chosen upload id; "" = all uploads
         profile["clip_counts"] = self.clip_counts(profile_id)
         return profile
 
     def set_voice_reference(self, profile_id: str, mode: str, clip_id: str = "") -> dict:
-        """Which recordings /speak copies the voice from (see REFERENCE_MODES).
-        With "uploads", clip_id picks ONE uploaded clip ("" = all uploads)."""
+        """Sets which recordings /speak copies the voice from (see REFERENCE_MODES).
+        With "uploads", clip_id picks one uploaded clip ("" = all)."""
         if mode not in REFERENCE_MODES:
             raise ProfileError(f"Unknown voice reference '{mode}'. Use one of: {', '.join(REFERENCE_MODES)}.")
         if clip_id:
@@ -243,21 +223,21 @@ class ProfileStore:
                 try:
                     out.append(self.get(folder.name))
                 except (ProfileNotFound, ValueError):
-                    continue   # skip a broken folder instead of crashing the page
+                    continue   # skip a broken folder instead of failing the whole list
         return sorted(out, key=lambda p: p["created_at"])
 
     def delete(self, profile_id: str):
-        """Removes the profile AND all its recordings from disk."""
+        """Removes the profile and all its recordings from disk."""
         folder = self._folder(profile_id)
         shutil.rmtree(folder)
         if self.active_id() is None:
-            # the deleted user was selected: fall back to the oldest remaining user
+            # the selected user was deleted: select the oldest remaining one
             remaining = self.list()
             self._write_settings({"active_profile": remaining[0]["id"] if remaining else None})
 
-    # ---------- which user is selected ----------
+    # Selected user
     def active_id(self):
-        """Id of the selected profile, or None if there isn't one (or it was deleted)."""
+        """Id of the selected profile, or None (none selected, or it was deleted)."""
         pid = self._read_settings().get("active_profile")
         try:
             self._folder(pid)
@@ -266,13 +246,13 @@ class ProfileStore:
             return None
 
     def select(self, profile_id: str) -> dict:
-        profile = self.get(profile_id)          # raises if it doesn't exist
+        profile = self.get(profile_id)          # raises if missing
         self._write_settings({"active_profile": profile_id})
         return profile
 
-    # ---------- voice clips ----------
+    # Recorded emotion clips
     def add_clip(self, profile_id: str, emotion: str, audio: bytes, extension: str = ".webm") -> int:
-        """Saves a recording, keeps only the newest MAX_CLIPS_PER_EMOTION. Returns the clip count."""
+        """Saves a recording, keeps the newest MAX_CLIPS_PER_EMOTION, returns the clip count."""
         if self.get(profile_id)["voice_type"] != "cloned":
             raise ProfileError("This user has a stock voice, so recordings aren't used.")
         if not audio:
@@ -281,9 +261,7 @@ class ProfileStore:
 
         folder = self._clip_folder(profile_id, emotion)
         folder.mkdir(parents=True, exist_ok=True)
-        # Files are numbered 000001, 000002, ... so sorting by name = oldest first.
-        # (A counter, not the clock: Windows' clock is too coarse and two quick
-        # uploads could get the same name and overwrite each other.)
+        # Numbered by a counter, not the clock: Windows' clock is too coarse and names could clash.
         clips = self._clip_files(folder)
         next_number = max((int(f.stem) for f in clips if f.stem.isdigit()), default=0) + 1
         (folder / f"{next_number:06d}{extension}").write_bytes(audio)
@@ -299,11 +277,10 @@ class ProfileStore:
         return sorted(f for f in folder.iterdir() if f.suffix.lower() in AUDIO_EXTENSIONS)
 
     def get_clips(self, profile_id: str, emotion: str) -> list:
-        """The saved recordings for one emotion, as raw bytes (oldest first)."""
+        """Recordings for one emotion as raw bytes, oldest first."""
         return [f.read_bytes() for f in self._clip_files(self._clip_folder(profile_id, emotion))]
 
-    # ---------- the voice references /speak sends to Colab ----------
-    # Each one is a dict: source, name (file shown on the page), duration_s, data (bytes).
+    # Voice references sent to Colab: dicts of source, name, duration_s, data.
     def _reference(self, source: str, name: str, path: Path, duration=None) -> dict:
         measured = clip_duration(path)
         return {"source": source, "name": name, "data": path.read_bytes(),
@@ -314,10 +291,8 @@ class ProfileStore:
         return [self._reference("emotion_clips", f"{emotion}/{f.name}", f) for f in self._clip_files(folder)]
 
     def choose_references(self, profile_id: str, emotion: str) -> tuple:
-        """The recordings /speak sends to Colab, following the user's "Voice reference"
-        setting. Returns (mode, source, references). If the setting asks for one kind
-        and there is none, raises a clear ProfileError: we never quietly swap in other
-        recordings (that once made an uploaded voice sound wrong without anyone knowing)."""
+        """Recordings for /speak per the Voice reference setting: (mode, source, references).
+        A forced kind with no recordings raises ProfileError; other recordings are never swapped in."""
         profile = self.get(profile_id)
         mode = profile["voice_reference"]
         finders = {
@@ -327,7 +302,7 @@ class ProfileStore:
             "guided": ("guided_references", lambda: self.guided_references(profile_id)),
         }
         if mode == "auto":
-            for source, find in finders.values():          # in order: recorded, uploads, guided
+            for source, find in finders.values():          # recorded, then uploads, then guided
                 refs = find()
                 if refs:
                     return mode, source, refs
@@ -336,7 +311,7 @@ class ProfileStore:
         source, find = finders[mode]
         refs = find()
         if mode == "uploads" and profile["reference_clip"] and not refs:
-            # the chosen clip was deleted: say so, never pick another upload by ourselves
+            # the chosen clip was deleted: never pick another upload instead
             raise ProfileError(f"The chosen uploaded clip (#{profile['reference_clip']}) no longer exists. "
                                "Choose another clip in Voice reference.")
         if not refs:
@@ -354,13 +329,7 @@ class ProfileStore:
         return {e: len(self._clip_files(clips_root / e))
                 for e in EMOTIONS if self._clip_files(clips_root / e)}
 
-    # ---------- guided voice banking ----------
-    # data/profiles/<id>/guided/
-    #     g001.webm, g002.webm ...   one recording per sentence
-    #     manifest.json              for each recording: the EXACT sentence read,
-    #                                its length, when it was made; plus which
-    #                                sentences were skipped and which recordings
-    #                                are used as voice references
+    # Guided voice banking: guided/<id>.webm + manifest.json (exact text, length, skips, references)
     def _guided_dir(self, profile_id: str) -> Path:
         return self._folder(profile_id) / "guided"
 
@@ -386,7 +355,7 @@ class ProfileStore:
 
     def save_guided(self, profile_id: str, sentence_id: str, audio: bytes,
                     extension: str = ".webm", duration_s: float = 0.0) -> dict:
-        """Saves (or replaces, for Redo) the recording of one sentence."""
+        """Saves the recording of one sentence, replacing any previous take."""
         if self.get(profile_id)["voice_type"] != "cloned":
             raise ProfileError("This user has a stock voice, so recordings aren't used.")
         text = self._check_sentence(sentence_id)
@@ -398,7 +367,7 @@ class ProfileStore:
 
         folder = self._guided_dir(profile_id)
         folder.mkdir(exist_ok=True)
-        for old in folder.glob(f"{sentence_id}.*"):      # Redo: remove the previous take
+        for old in folder.glob(f"{sentence_id}.*"):      # remove the previous take
             if old.suffix.lower() in AUDIO_EXTENSIONS:
                 old.unlink()
         (folder / f"{sentence_id}{extension}").write_bytes(audio)
@@ -406,7 +375,7 @@ class ProfileStore:
         manifest = self._read_manifest(profile_id)
         manifest["recordings"][sentence_id] = {
             "file": f"{sentence_id}{extension}",
-            "text": text,                      # the exact words, kept with the clip
+            "text": text,                      # exact words, needed for fine-tuning
             "duration_s": round(float(duration_s), 2),
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
@@ -416,7 +385,7 @@ class ProfileStore:
         return self.guided_status(profile_id)
 
     def skip_guided(self, profile_id: str, sentence_id: str) -> dict:
-        """Marks a sentence as skipped. It's offered again once the rest are done."""
+        """Marks a sentence as skipped; it's offered again after the rest."""
         self._check_sentence(sentence_id)
         manifest = self._read_manifest(profile_id)
         if sentence_id not in manifest["recordings"] and sentence_id not in manifest["skipped"]:
@@ -425,12 +394,12 @@ class ProfileStore:
         return self.guided_status(profile_id)
 
     def guided_status(self, profile_id: str) -> dict:
-        """Progress so far, and which sentence to show next (so you can resume later)."""
+        """Progress so far and the next sentence to show."""
         manifest = self._read_manifest(profile_id)
         recorded = manifest["recordings"]
         not_recorded = [sid for sid, _ in GUIDED_SENTENCES if sid not in recorded]
         fresh = [sid for sid in not_recorded if sid not in manifest["skipped"]]
-        # next = first sentence never seen; once those run out, go back to the skipped ones
+        # first unseen sentence; skipped ones come back once those run out
         next_id = (fresh or not_recorded or [None])[0]
         return {
             "recorded": {sid: {"duration_s": r["duration_s"], "recorded_at": r["recorded_at"]}
@@ -461,14 +430,9 @@ class ProfileStore:
                 items.append((sid, rec["text"], self._guided_dir(profile_id) / rec["file"]))
         return items
 
-    # ---------- guided recordings as cloning references ----------
     def pick_references(self, profile_id: str, target_seconds: float = 30.0, max_clips: int = 10) -> list:
-        """
-        Chooses guided recordings to use as voice references for zero-shot cloning.
-        XTTS joins all reference clips together and listens to the first 30 seconds
-        (gpt_cond_len=30 in the Colab notebook), so we take the LONGEST recordings
-        (more speech, less silence) until they add up to about 30 seconds.
-        """
+        """Chooses guided takes as voice references: the longest, up to about 30 s,
+        because XTTS uses the first 30 s of the joined clips (gpt_cond_len=30)."""
         recorded = self._read_manifest(profile_id)["recordings"]
         if not recorded:
             raise ProfileError("Record some guided sentences first.")
@@ -484,11 +448,7 @@ class ProfileStore:
         self._write_manifest(profile_id, manifest)
         return chosen
 
-    # ---------- uploaded old recordings ----------
-    # For people who already lost their voice: old voice notes / videos, cut in the
-    # browser to just their voice and converted there to a clean mono WAV.
-    # data/profiles/<id>/uploads/000001.wav ...  + manifest.json with, for each clip:
-    # the original file name, the trim, durations, and WHO consented and WHEN.
+    # Uploaded old recordings: uploads/<id>.wav + manifest.json (name, trim, lengths, consent)
     def _uploads_dir(self, profile_id: str) -> Path:
         return self._folder(profile_id) / "uploads"
 
@@ -507,7 +467,7 @@ class ProfileStore:
 
     def add_upload(self, profile_id: str, wav_bytes: bytes, *, original_name: str, start_s: float,
                    end_s: float, speech_s: float, consent: bool, consented_by: str) -> dict:
-        """Checks and saves one trimmed recording. Raises ProfileError with a clear reason."""
+        """Validates and saves one trimmed recording; raises ProfileError with the reason."""
         if self.get(profile_id)["voice_type"] != "cloned":
             raise ProfileError("This user has a stock voice, so recordings aren't used.")
         consented_by = " ".join((consented_by or "").split())
@@ -523,9 +483,9 @@ class ProfileStore:
         if len(wav_bytes) > MAX_UPLOAD_BYTES:
             raise ProfileError(f"Clip is too big (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB). Trim it shorter.")
 
-        duration = wav_duration(wav_bytes)            # raises ProfileError if not a proper WAV
+        duration = wav_duration(wav_bytes)            # raises ProfileError if not a valid WAV
 
-        # the trim must make sense and match the audio we actually received
+        # the trim must be valid and match the audio received
         if not (start_s >= 0 and end_s > start_s):
             raise ProfileError("Trim end must be after trim start.")
         length = end_s - start_s
@@ -582,10 +542,8 @@ class ProfileStore:
 
     def upload_references(self, profile_id: str, target_seconds: float = 45.0, max_clips: int = 6,
                           only: str = "") -> list:
-        """Uploaded clips to send to Colab as voice references: the ones with the most
-        speech first, until about 45 s (XTTS uses up to 30 s; F5 gets only the first one,
-        see app.py). Capped so each request through ngrok stays small.
-        only = one clip id: just that clip (or nothing if it was deleted)."""
+        """Uploads as voice references, most speech first, up to ~45 s and max_clips (keeps requests small).
+        only = one clip id: just that clip, or nothing if it was deleted."""
         clips = sorted(self._read_uploads(profile_id)["clips"], key=lambda c: c["speech_s"], reverse=True)
         if only:
             clips = [c for c in clips if c["id"] == only]
@@ -603,7 +561,7 @@ class ProfileStore:
         return out
 
     def get_upload_clips(self, profile_id: str, target_seconds: float = 45.0, max_clips: int = 6) -> list:
-        """Same as upload_references, as raw bytes only."""
+        """upload_references as raw bytes."""
         return [r["data"] for r in self.upload_references(profile_id, target_seconds, max_clips)]
 
     def clear_references(self, profile_id: str):
@@ -612,7 +570,7 @@ class ProfileStore:
         self._write_manifest(profile_id, manifest)
 
     def guided_references(self, profile_id: str) -> list:
-        """The guided recordings chosen as voice references (skips any that were deleted)."""
+        """Guided takes chosen as voice references, skipping deleted ones."""
         manifest = self._read_manifest(profile_id)
         out = []
         for sid in manifest["references"]:
@@ -625,5 +583,5 @@ class ProfileStore:
         return out
 
     def get_reference_clips(self, profile_id: str) -> list:
-        """The chosen guided recordings as raw bytes."""
+        """guided_references as raw bytes."""
         return [r["data"] for r in self.guided_references(profile_id)]

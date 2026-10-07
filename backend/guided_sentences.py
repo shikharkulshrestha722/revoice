@@ -1,31 +1,8 @@
-# ============================================================
-# ReVoice — Sentences for guided voice banking
-# ============================================================
-# The person reads these aloud one at a time. Each recording is saved
-# with its exact sentence, which gives us:
-#   1. a training dataset for fine-tuning XTTS on their voice (Phase 3)
-#   2. clean reference clips for zero-shot cloning
-#
-# How the list was chosen:
-#   - short, natural things a patient would really say (needs, feelings,
-#     family, medical), so the recordings are useful messages in their own right
-#   - a wide mix of English sounds (th, sh, ch, j, zh as in "usually",
-#     ng, v, w, y, r/l clusters, oi, ow...) so the model hears every sound
-#   - statements, questions and exclamations, for varied intonation
-#   - no digits or symbols (numbers are spelled out) and never a "|"
-#     character, because "|" separates columns in the dataset file
-#
-# IDs (g001, g002, ...) must NEVER change or be reused: saved recordings
-# point at them. To add sentences, append new ids at the end.
-#
-# g001-g150: short patient phrases (about 6-8 minutes of audio in total)
-# g151-g350: longer conversational sentences, 12-20 words, no names, numbers
-#            or abbreviations (about 20 more minutes), so the whole list gives
-#            enough data for fine-tuning
-# ============================================================
+"""Sentences for guided voice banking. Chosen for varied English sounds and intonation, no digits
+or "|" (the dataset's column separator). Ids must never change or be reused: recordings point at them."""
 
 GUIDED_SENTENCES = [
-    # ---- everyday needs ----
+    # everyday needs
     ("g001", "I would like a glass of water, please."),
     ("g002", "Could you help me sit up a little?"),
     ("g003", "I need to use the bathroom."),
@@ -52,7 +29,7 @@ GUIDED_SENTENCES = [
     ("g024", "Can I have a straw?"),
     ("g025", "Just a small spoonful, please."),
 
-    # ---- comfort and the body ----
+    # comfort and the body
     ("g026", "My back is aching."),
     ("g027", "Please roll me onto my left side."),
     ("g028", "Now onto my right side, slowly."),
@@ -74,7 +51,7 @@ GUIDED_SENTENCES = [
     ("g044", "I think I'm getting a headache."),
     ("g045", "I usually feel stronger in the morning."),
 
-    # ---- medical ----
+    # medical
     ("g046", "I'm in pain. Please call the nurse."),
     ("g047", "I can't breathe properly."),
     ("g048", "It's time for my medicine."),
@@ -101,7 +78,7 @@ GUIDED_SENTENCES = [
     ("g069", "The pain is worse than yesterday."),
     ("g070", "The pain is easing off now."),
 
-    # ---- feelings ----
+    # feelings
     ("g071", "I'm feeling happy today."),
     ("g072", "I'm a little sad this evening."),
     ("g073", "I'm frustrated, but I'll be okay."),
@@ -123,7 +100,7 @@ GUIDED_SENTENCES = [
     ("g089", "I'm excited to see everyone this weekend."),
     ("g090", "Thank you for listening to me."),
 
-    # ---- family and friends ----
+    # family and friends
     ("g091", "I love you very much."),
     ("g092", "Give me a hug."),
     ("g093", "How was your day at school?"),
@@ -150,7 +127,7 @@ GUIDED_SENTENCES = [
     ("g114", "Your grandmother would be very proud."),
     ("g115", "Come and sit next to me."),
 
-    # ---- quick replies and conversation ----
+    # quick replies and conversation
     ("g116", "Yes, please."),
     ("g117", "No, thank you."),
     ("g118", "Maybe later."),
@@ -172,7 +149,7 @@ GUIDED_SENTENCES = [
     ("g134", "I agree with you."),
     ("g135", "Let's talk about it tomorrow."),
 
-    # ---- daily life and extra sounds ----
+    # daily life and extra sounds
     ("g136", "The garden looks beautiful in the sunshine."),
     ("g137", "Is it raining outside?"),
     ("g138", "I'd love to go to the beach in July."),
@@ -189,8 +166,7 @@ GUIDED_SENTENCES = [
     ("g149", "I enjoy the quiet in the evening."),
     ("g150", "Thank you all for helping me find my voice."),
 
-    # ---- longer everyday sentences (12-20 words): more audio per take, so a full
-    #      session reaches the 15-30 minutes needed for fine-tuning ----
+    # longer sentences (12-20 words): more audio per take, enough in total for fine-tuning
     ("g151", "I think I'd like to spend the afternoon by the window, watching the birds in the garden."),
     ("g152", "Could you remind me what we decided about visiting the family at the end of the month?"),
     ("g153", "It's funny how a cup of tea always tastes better when somebody else makes it for you."),
@@ -393,9 +369,7 @@ GUIDED_SENTENCES = [
     ("g350", "I simply cannot believe how delicious this cake is, you've completely outdone yourself this time!"),
 ]
 
-# quick lookup: id -> sentence
 SENTENCE_BY_ID = dict(GUIDED_SENTENCES)
 
-# The panel splits the list into sessions of this many sentences,
-# so recording can be spread over several sittings.
+# Sentences per sitting in the guided panel.
 SESSION_SIZE = 50

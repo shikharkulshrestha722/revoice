@@ -1,26 +1,16 @@
-# ============================================================
-# ReVoice — Phrase Prediction
-# ============================================================
-# Given what the patient has typed so far, suggest 3 likely
-# completions so they don't have to spell every letter.
-#
-# Two modes:
-#   1. Gemini (smart, context-aware)  -> used when an API key is set
-#   2. Offline word list (always works) -> used if Gemini fails
-# ============================================================
+"""Phrase prediction: 3 likely sentences from Gemini, or from an offline list when Gemini is unavailable."""
 
 import json
 import re
 
-# Short, high-frequency phrases a patient is likely to need.
-# Used when there's no text yet, or when Gemini is unavailable.
+# Common patient phrases, shown before typing starts or when Gemini is unavailable.
 STARTER_PHRASES = [
     "I need help", "Yes", "No", "Thank you", "I am in pain",
     "I need water", "Please wait", "I am tired", "Call the nurse",
     "I love you", "I am hungry", "Turn me over",
 ]
 
-# Common words for offline completion, ordered by usefulness
+# Offline word completion, most useful first.
 COMMON_WORDS = [
     "I", "AM", "NEED", "WANT", "PLEASE", "HELP", "WATER", "FOOD", "PAIN",
     "YES", "NO", "THANK", "YOU", "NURSE", "DOCTOR", "BED", "COLD", "HOT",
@@ -32,7 +22,7 @@ COMMON_WORDS = [
 ]
 
 
-# Likely next words, used only by the offline fallback
+# Offline next-word guesses.
 CONTINUATIONS = {
     "I":      ["NEED", "AM", "WANT"],
     "AM":     ["TIRED", "IN PAIN", "COLD"],
@@ -46,7 +36,7 @@ CONTINUATIONS = {
 
 
 def build_prompt(text: str) -> str:
-    """Creates the instruction we send to Gemini."""
+    """Builds the Gemini prompt."""
     text = text.strip()
     if not text:
         situation = "The patient has not typed anything yet. Suggest 3 common things they might want to say."
@@ -75,14 +65,14 @@ def build_prompt(text: str) -> str:
 
 
 def parse_suggestions(raw: str, limit: int = 3) -> list:
-    """Pulls the list of suggestions out of Gemini's reply."""
+    """Extracts the suggestions from Gemini's reply."""
     if not raw:
         return []
 
     cleaned = raw.strip()
     cleaned = re.sub(r"^```(?:json)?|```$", "", cleaned, flags=re.MULTILINE).strip()
 
-    # Preferred: a JSON array somewhere in the reply
+    # preferred: a JSON array anywhere in the reply
     match = re.search(r"\[.*\]", cleaned, flags=re.DOTALL)
     if match:
         try:
@@ -93,7 +83,7 @@ def parse_suggestions(raw: str, limit: int = 3) -> list:
         except (ValueError, TypeError):
             pass
 
-    # Fallback: treat each line as a suggestion
+    # otherwise: one suggestion per line
     lines = []
     for line in cleaned.splitlines():
         line = line.strip().strip('",')
@@ -104,8 +94,8 @@ def parse_suggestions(raw: str, limit: int = 3) -> list:
 
 
 def fallback_suggestions(text: str, limit: int = 3) -> list:
-    """Works with no internet and no API key, so a demo never dies."""
-    text = text.lstrip()          # keep a trailing space: it means "start a new word"
+    """Offline suggestions: work with no internet and no API key."""
+    text = text.lstrip()          # keep a trailing space: it means a new word starts
 
     if not text.strip():
         return STARTER_PHRASES[:limit]
@@ -135,10 +125,10 @@ def fallback_suggestions(text: str, limit: int = 3) -> list:
         phrase = f"{prefix} {w}".strip()
         out.append(phrase.capitalize())
 
-    # if nothing matched, fall back to starter phrases that begin with the typed letters
+    # no word matched: starter phrases beginning with the typed letters
     if not out:
         out = [p for p in STARTER_PHRASES if p.upper().startswith(partial)][:limit]
-    # pad out to `limit` so the suggestion bar is never half empty
+    # pad to `limit` so the suggestion bar is never half empty
     for p in STARTER_PHRASES:
         if len(out) >= limit:
             break
@@ -147,9 +137,7 @@ def fallback_suggestions(text: str, limit: int = 3) -> list:
     return out[:limit]
 
 
-# How AI refusals / chatty replies start. These must be SPECIFIC:
-# a plain "i can't" or "i'm sorry" would also block real patient
-# phrases like "I can't breathe" or "I'm sorry".
+# Starts of refusals and chatty replies. Kept specific: a plain "i can't" would also block "I can't breathe".
 REFUSAL_PATTERNS = [
     r"^(i'm|i am) sorry,? but\b",
     r"^i (cannot|can't|can not) (help|assist|provide|fulfil|fulfill|comply|do that)\b",
@@ -163,7 +151,7 @@ REFUSAL_PATTERNS = [
 
 
 def is_sensible(s: str) -> bool:
-    """Rejects refusals, explanations, and anything too long to be a spoken phrase."""
+    """Rejects refusals, explanations and anything too long to be a spoken phrase."""
     if not s or len(s) > 60 or len(s.split()) > 10:
         return False
     lowered = s.lower().strip()
@@ -171,12 +159,8 @@ def is_sensible(s: str) -> bool:
 
 
 def get_suggestions(text: str, call_gemini=None, limit: int = 3) -> dict:
-    """
-    Main entry point.
-    call_gemini: a function(prompt) -> str. If it's None or fails,
-    we silently use the offline list instead.
-    Returns {"suggestions": [...], "source": "gemini"|"offline"}
-    """
+    """Returns {"suggestions": [...], "source": "gemini" | "offline"}.
+    Uses call_gemini(prompt) -> str when given; falls back to the offline list if it's None or fails."""
     if call_gemini is not None:
         try:
             raw = call_gemini(build_prompt(text))

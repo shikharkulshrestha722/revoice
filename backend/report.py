@@ -1,13 +1,4 @@
-# ============================================================
-# ReVoice — Print a summary of the generation log (for the report)
-# ============================================================
-# Usage (from the backend folder):
-#     py -3.10 report.py                     reads data/generation_log.csv
-#     py -3.10 report.py path\to\other.csv   reads another log
-#
-# The same numbers are available while the server runs at
-#     http://localhost:8000/stats/summary
-# ============================================================
+"""Prints the generation log summary: py -3.10 report.py [path/to/log.csv]. Also at /stats/summary."""
 
 import os
 import sys

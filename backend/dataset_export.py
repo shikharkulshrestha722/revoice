@@ -1,16 +1,5 @@
-# ============================================================
-# ReVoice — Export guided recordings as a training dataset
-# ============================================================
-# Builds a zip in "LJSpeech" style, the layout coqui-tts reads for
-# fine-tuning (checked in coqui-tts 0.27.5, TTS/tts/datasets/formatters.py):
-#
-#   metadata.csv     one line per clip:   g001|I would like a glass of water, please.|<same text>
-#                    (id | text | normalised text; coqui uses the 3rd column; no header line)
-#   wavs/g001.wav    22050 Hz mono WAV, if ffmpeg is installed on this computer
-#   raw/g001.webm    the original browser recording, if ffmpeg is NOT installed.
-#                    The Colab fine-tuning notebook converts raw/ into wavs/.
-#   README.txt       what's inside and who it belongs to
-# ============================================================
+"""Exports guided recordings as an LJSpeech-style zip for XTTS fine-tuning
+(metadata.csv "id|text|text", wavs/ at 22050 Hz if ffmpeg is installed, else raw/ webm)."""
 
 import io
 import shutil
@@ -41,7 +30,7 @@ def convert_to_wav(src: Path, dst: Path):
 
 
 def build_dataset_zip(store, profile_id: str, convert: bool = None) -> bytes:
-    """Returns the zip file as bytes. convert=None means 'use ffmpeg if it's installed'."""
+    """Returns the zip as bytes; convert=None uses ffmpeg if it's installed."""
     profile = store.get(profile_id)
     items = store.guided_items(profile_id)
     if not items:

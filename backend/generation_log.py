@@ -1,42 +1,5 @@
-# ============================================================
-# ReVoice — Generation log + summary (evidence for the report)
-# ============================================================
-# Every /speak call adds one row to data/generation_log.csv:
-#
-#   timestamp             when it happened (UTC)
-#   utterance_id          random id for one composed sentence. "Compare both"
-#                         or speaking the same sentence twice gives several rows
-#                         with the same id; the summary counts the sentence once.
-#   engine, emotion       what was asked for
-#   voice_source          stock / emotion_clips / uploaded_recordings / guided_references
-#   chars, words          length of the composed text (the text itself is NOT
-#                         saved, for privacy)
-#   selections            pointer selections the patient used for this sentence
-#   letter_by_letter      selections it would take to spell it letter by letter
-#                         (one per letter and one per space)
-#   selections_saved_pct  how much prediction saved: (letter_by_letter - selections)
-#                         / letter_by_letter x 100
-#   seconds               time for Colab to generate the audio (includes network)
-#   success, error        did it work, and if not, why
-#   synth_seconds         speech generation alone, measured on Colab (no network, no metrics)
-#   similarity            how similar the output voice is to the person's real voice
-#                         (speaker-embedding cosine similarity, 1 = identical)
-#   ref_/out_accent       estimated English accent of the real voice / of the output, only
-#                         when there were >= 3 s of speech ("too_short" otherwise; see accent.py)
-#   accent_match          yes/no only when BOTH sides are long enough and at least medium
-#                         confidence; empty when it can't fairly be judged
-#   ref_/out_pitch_hz     average pitch of the real voice / of the output
-#   ref_/out_words_per_sec  speaking rate of the real voice / of the output
-#   ref_mode              the Voice reference setting: auto / uploads / recorded / guided
-#   ref_files             exactly which recordings were sent, with their length, e.g.
-#                         "Recording (2).m4a (#000001) 17.99s" (several joined with " | ")
-#   ref_seconds           total length of those recordings
-#   ref_text              F5 only: the words Whisper heard in the reference it copied
-#   ref_/out_accent_scores  the 3 most likely accents with RAW scores (-1..1, not %),
-#                         e.g. "indian 0.638; us 0.511; scotland 0.282" (Colab v8+)
-#   input_method          pointer / keyboard / mixed. Typed sentences have no selections,
-#                         so they never count in the "selections saved" summary
-# ============================================================
+"""Generation log: one CSV row per /speak call (the sentence text is not stored, for privacy),
+and summarize() for /stats/summary and report.py."""
 
 import csv
 import os
@@ -49,21 +12,18 @@ from accent import compare_accents, judge_accent, scores_text
 
 FIELDS = ["timestamp", "utterance_id", "engine", "emotion", "voice_source", "chars", "words",
           "selections", "letter_by_letter", "selections_saved_pct", "seconds", "success", "error",
-          # voice evaluation (added later, so they come last)
+          # newer columns are appended so older logs stay readable
           "synth_seconds", "similarity", "ref_accent", "out_accent", "accent_match",
           "ref_pitch_hz", "out_pitch_hz", "ref_words_per_sec", "out_words_per_sec",
-          # which recordings the voice was copied from (added later again)
           "ref_mode", "ref_files", "ref_seconds", "ref_text",
-          # accent as raw top-3 scores (Colab v8)
           "ref_accent_scores", "out_accent_scores",
-          # typed with a keyboard, or pointed?
           "input_method"]
 
-_lock = threading.Lock()   # two requests at once must not mix up their lines
+_lock = threading.Lock()   # concurrent requests must not interleave rows
 
 
 def tidy(text: str) -> str:
-    """'  I  NEED   WATER ' -> 'I NEED WATER' (the sentence as it would be spelled)."""
+    """'  I  NEED   WATER ' -> 'I NEED WATER'."""
     return " ".join((text or "").split())
 
 
@@ -83,13 +43,13 @@ def _blank(value):
 
 
 def metric_columns(metrics) -> dict:
-    """Turns the metrics from Colab (nested, any part may be null) into flat CSV columns."""
+    """Flattens Colab's metrics (any part may be null) into CSV columns."""
     m = metrics or {}
     ref = m.get("reference") or {}
     out = m.get("output") or {}
     ref_j, out_j = judge_accent(ref), judge_accent(out)
     if ref_j["status"] == "old_notebook" or out_j["status"] == "old_notebook":
-        match = m.get("accent_match")                 # Colab before v8 decided it itself
+        match = m.get("accent_match")                 # before v8 Colab decided it
     else:
         match = compare_accents(ref_j, out_j)["match"] if m.get("reference") else None
 
@@ -110,7 +70,7 @@ def metric_columns(metrics) -> dict:
 
 
 def reference_columns(voice_reference, ref_text) -> dict:
-    """The recordings sent to Colab (see app.voice_reference_info) as flat CSV columns."""
+    """The recordings sent to Colab (app.voice_reference_info) as CSV columns."""
     ref = voice_reference or {}
     return {
         "ref_mode": ref.get("mode", ""),
@@ -121,8 +81,7 @@ def reference_columns(voice_reference, ref_text) -> dict:
 
 
 def _upgrade_old_file(path):
-    """An older log may have fewer columns. Rewrite it with the current header
-    (old rows keep their values, new columns stay empty) so the CSV stays valid."""
+    """Rewrites an older log with the current header; new columns stay empty."""
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         if reader.fieldnames == FIELDS:
@@ -138,7 +97,7 @@ def log_generation(path, *, text, engine, emotion, voice_source="", seconds=None
                    success=False, error="", selections=None, utterance_id="",
                    synth_seconds=None, metrics=None, voice_reference=None, ref_text=None,
                    input_method=""):
-    """Appends one row to the CSV (creating it, with a header line, if needed)."""
+    """Appends one row, creating the file with a header if needed."""
     clean = tidy(text)
     needed = letter_by_letter_selections(clean)
     row = {
@@ -188,10 +147,10 @@ def _number(value):
 
 
 def summarize(path) -> dict:
-    """Average generation time per engine, and how many selections prediction saved."""
+    """Generation time and voice metrics per engine, and selections saved by prediction."""
     rows = read_rows(path)
 
-    # ---- generation time per engine (successful generations only) ----
+    # per engine, successful generations only
     by_engine = defaultdict(list)
     for r in rows:
         by_engine[r["engine"]].append(r)
@@ -218,7 +177,7 @@ def summarize(path) -> dict:
             "accent_measured": len(matches),
         }
 
-    # ---- selections saved, counted once per sentence (the latest row wins) ----
+    # selections saved: each sentence counted once (latest row wins)
     latest = {}
     for r in rows:
         if r.get("utterance_id") and _number(r.get("selections")) is not None:
@@ -231,9 +190,9 @@ def summarize(path) -> dict:
         "sentences": len(sentences),
         "avg_selections": round(statistics.mean(sel), 1) if sel else None,
         "avg_letter_by_letter": round(statistics.mean(need), 1) if need else None,
-        # average of each sentence's own saving
+        # mean of per-sentence savings
         "avg_saved_pct": round(statistics.mean(saved), 1) if saved else None,
-        # all sentences pooled together (long sentences count for more)
+        # pooled, so longer sentences weigh more
         "overall_saved_pct": round(100 * (sum(need) - sum(sel)) / sum(need), 1) if sum(need) else None,
     }
 
