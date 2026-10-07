@@ -1,5 +1,4 @@
-# The parity script must send EXACTLY the same reference bytes and text on both paths
-# (otherwise its comparison would mean nothing). Colab is faked here.
+# The parity script must send identical bytes and text on both paths (Colab mocked).
 import base64
 import io
 import sys

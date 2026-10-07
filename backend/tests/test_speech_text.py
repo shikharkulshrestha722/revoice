@@ -1,5 +1,4 @@
-# Tests for prepare_text_for_speech(): turning the grid's ALL CAPS text
-# into something XTTS reads naturally, with punctuation matched to emotion.
+# prepare_text_for_speech: sentence case and punctuation per emotion.
 import pytest
 
 from app import prepare_text_for_speech

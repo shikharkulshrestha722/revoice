@@ -1,5 +1,4 @@
-# Shared test setup.
-# Run all tests from the backend folder with:   py -3.10 -m pytest
+# Shared fixtures: no real network calls, and a fresh data folder per test.
 import os
 import sys
 

@@ -1,4 +1,4 @@
-# Tests for the generation log (data/generation_log.csv) and its summary.
+# The generation log CSV and its summary.
 import csv
 
 import pytest
@@ -40,7 +40,7 @@ def speak(**fields):
     return client.post("/speak", data=data)
 
 
-# ================= small helpers =================
+# Small helpers
 
 def test_letter_by_letter_counts_letters_and_single_spaces():
     assert letter_by_letter_selections("I NEED WATER") == 12        # 10 letters + 2 spaces
@@ -56,7 +56,7 @@ def test_saved_percent():
     assert saved_percent(3, 0) is None
 
 
-# ================= /speak writes the log =================
+# /speak writes the log
 
 def test_successful_speak_is_logged(user, monkeypatch):
     monkeypatch.setattr(backend.requests, "post", lambda *a, **kw: FakeResponse(200))
@@ -130,7 +130,7 @@ def test_bad_selections_value_is_ignored(user, monkeypatch):
     assert log_rows()[0]["selections"] == ""
 
 
-# ================= summary =================
+# Summary
 
 def test_summary_per_engine_and_selections(tmp_path):
     path = str(tmp_path / "log.csv")
@@ -175,7 +175,7 @@ def test_stats_endpoint(user, monkeypatch):
     assert s["selections"]["sentences"] == 1
 
 
-# ================= voice evaluation metrics (mocked Colab replies) =================
+# Voice evaluation metrics (mocked Colab replies)
 
 METRICS = {
     "similarity": 0.734,

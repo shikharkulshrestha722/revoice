@@ -1,5 +1,4 @@
-# The page must stay responsive while Colab is generating speech (which can take
-# 20-40 seconds): predictions have to keep working during that time.
+# Predictions must keep answering while Colab is busy generating speech.
 import threading
 import time
 

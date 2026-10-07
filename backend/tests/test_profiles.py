@@ -1,5 +1,4 @@
-# Tests for user profiles and the on-disk voice bank (profiles.py + the
-# /profiles endpoints). Each test uses its own temporary data folder.
+# Profiles and the on-disk voice bank (profiles.py and /profiles endpoints).
 import json
 
 import pytest
@@ -32,7 +31,7 @@ def upload(emotion="neutral", data=b"audio", profile_id=""):
                        files={"file": ("clip.webm", data, "audio/webm")})
 
 
-# ================= ProfileStore (the disk storage) =================
+# ProfileStore (the disk storage)
 
 def test_create_writes_profile_json(store):
     p = store.create("Mr  Sharma", "cloned", consent_given=True)
@@ -124,7 +123,7 @@ def test_deleting_selected_user_falls_back_to_oldest_remaining(store):
     assert store.active_id() is None
 
 
-# ================= /profiles endpoints =================
+# /profiles endpoints
 
 def test_no_profiles_at_start():
     assert client.get("/profiles").json() == {"profiles": [], "active": None}
@@ -198,7 +197,7 @@ def test_delete_unknown_user_is_404():
     assert client.delete("/profiles/nobody-0000").status_code == 404
 
 
-# ================= stock voices =================
+# Stock voices
 
 def test_stock_speakers_from_colab(monkeypatch):
     monkeypatch.setattr(backend.requests, "get",

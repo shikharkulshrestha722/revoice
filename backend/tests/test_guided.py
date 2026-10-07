@@ -1,6 +1,4 @@
-# Tests for guided voice banking: the sentence list, saving clips with
-# their transcripts, resume/skip, references for cloning, and the
-# LJSpeech-style dataset export.
+# Guided voice banking: sentence list, storage, resume/skip, references, dataset export.
 import io
 import json
 import re
@@ -30,7 +28,7 @@ def record(sentence_id, data=b"audio", duration=3.0, profile_id=""):
                        files={"file": ("take.webm", data, "audio/webm")})
 
 
-# ================= the sentence list =================
+# The sentence list
 
 def test_there_are_350_sentences_with_unique_ordered_ids():
     ids = [sid for sid, _ in GUIDED_SENTENCES]
@@ -70,7 +68,7 @@ def test_long_sentences_mix_statements_questions_and_exclamations():
     assert endings.count("?") >= 30 and endings.count("!") >= 10
 
 
-# ================= storage =================
+# Storage
 
 def test_save_keeps_exact_transcript(store, user):
     store.save_guided(user["id"], "g001", b"take1", ".webm", 3.4)
@@ -141,7 +139,7 @@ def test_deleting_user_removes_guided_recordings(store, user):
     assert not (store.profiles_dir / user["id"]).exists()
 
 
-# ================= references for cloning =================
+# References for cloning
 
 def test_pick_references_takes_longest_until_30_seconds(store, user):
     for sid, secs in [("g001", 4.0), ("g002", 12.0), ("g003", 9.0), ("g004", 11.0), ("g005", 2.0)]:
@@ -199,7 +197,7 @@ class FakeOk:
         return {"audio_base64": "x"}
 
 
-# ================= endpoints =================
+# Endpoints
 
 def test_sentences_endpoint():
     data = client.get("/guided/sentences").json()["sentences"]
@@ -231,7 +229,7 @@ def test_clear_references_endpoint(store, user):
     assert client.delete("/guided/references").json()["references"] == []
 
 
-# ================= dataset export =================
+# Dataset export
 
 def read_zip(content):
     return zipfile.ZipFile(io.BytesIO(content))

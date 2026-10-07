@@ -1,5 +1,4 @@
-# Typed sentences (text box) go through exactly the same /speak steps as pointer
-# sentences, and are logged as typed so they never inflate "selections saved".
+# Typed sentences go through the same /speak steps and never count as selection savings.
 import base64
 import csv
 

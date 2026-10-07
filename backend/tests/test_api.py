@@ -1,5 +1,4 @@
-# Tests for the web API endpoints. Colab and Gemini are MOCKED (faked),
-# so these run without internet, a GPU, or an API key.
+# API endpoints, with Colab and Gemini mocked.
 import base64
 
 import pytest
@@ -61,7 +60,7 @@ def upload(emotion, data=b"fake-webm-audio"):
     )
 
 
-# ---------- voice bank ----------
+# Voice bank
 
 def test_upload_and_count_clips(tester):
     assert upload("happy").json() == {
@@ -83,7 +82,7 @@ def test_upload_unknown_emotion_is_refused():
     assert "Unknown emotion" in r.json()["error"]
 
 
-# ---------- /speak ----------
+# /speak
 
 def test_speak_without_clips_is_refused(fake_colab):
     r = client.post("/speak", data={"text": "HELLO", "emotion": "happy"})
@@ -160,7 +159,7 @@ def test_speak_when_colab_is_unreachable(fake_colab):
     assert "Could not reach Colab" in r.json()["error"]
 
 
-# ---------- /predict ----------
+# /predict
 
 def test_predict_uses_gemini_when_key_is_set(monkeypatch):
     prompts = []
@@ -212,7 +211,7 @@ def test_call_gemini_sends_key_in_header_and_reads_reply(monkeypatch):
     assert sent["body"]["contents"][0]["parts"][0]["text"] == "hello"
 
 
-# ---------- no-cache middleware ----------
+# No-cache middleware
 
 @pytest.mark.parametrize("path", ["/", "/app.js", "/tracking.js", "/style.css"])
 def test_frontend_files_are_not_cached(path):
@@ -226,7 +225,7 @@ def test_api_replies_are_not_given_the_no_cache_header():
     assert "cache-control" not in r.headers
 
 
-# ---------- retry once on connection problems ----------
+# Retry once on connection problems
 
 def sequence_post(monkeypatch, outcomes):
     """Fake Colab that gives each outcome in turn (an exception, or a reply)."""

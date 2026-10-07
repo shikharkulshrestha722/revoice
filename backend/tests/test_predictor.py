@@ -1,5 +1,4 @@
-# Tests for predictor.py: reading Gemini's reply, the offline fallback,
-# and the junk filter. No internet is used.
+# predictor.py: parsing Gemini's reply, the offline fallback and the junk filter.
 from predictor import (
     STARTER_PHRASES,
     build_prompt,
@@ -10,7 +9,7 @@ from predictor import (
 )
 
 
-# ---------- parse_suggestions: reading Gemini's reply ----------
+# parse_suggestions: reading Gemini's reply
 
 def test_parse_plain_json_array():
     assert parse_suggestions('["I need water", "I need help", "I need rest"]') == [
@@ -45,7 +44,7 @@ def test_parse_empty_reply():
     assert parse_suggestions(None) == []
 
 
-# ---------- fallback_suggestions: offline list ----------
+# fallback_suggestions: offline list
 
 def test_fallback_empty_text_gives_starter_phrases():
     assert fallback_suggestions("") == STARTER_PHRASES[:3]
@@ -78,7 +77,7 @@ def test_fallback_no_match_still_returns_three():
     assert all(isinstance(s, str) and s for s in out)
 
 
-# ---------- is_sensible: junk filter ----------
+# is_sensible: junk filter
 
 def test_sensible_normal_phrases_pass():
     for s in ["I need water", "Call the nurse", "Yes", "I'm sorry",
@@ -104,7 +103,7 @@ def test_sensible_rejects_empty_and_too_long():
     assert not is_sensible("one two three four five six seven eight nine ten eleven")
 
 
-# ---------- get_suggestions: Gemini first, offline if it fails ----------
+# get_suggestions: Gemini first, offline if it fails
 
 def test_uses_gemini_when_it_works():
     result = get_suggestions("I NEED ", call_gemini=lambda p: '["I need water", "I need help"]')
@@ -132,7 +131,7 @@ def test_gemini_junk_items_are_filtered_out():
     assert result == {"suggestions": ["I need water"], "source": "gemini"}
 
 
-# ---------- build_prompt ----------
+# build_prompt
 
 def test_prompt_mentions_typed_text_and_partial_word():
     prompt = build_prompt("I NE")

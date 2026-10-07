@@ -1,5 +1,4 @@
-# Tests for accent.py (how the accent estimate is read). The numbers are REAL scores
-# the CommonAccent model gave on the project's own recordings.
+# accent.py rules, using real scores the model gave on the project's recordings.
 import csv
 
 import pytest

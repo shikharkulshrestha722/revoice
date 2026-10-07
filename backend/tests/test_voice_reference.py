@@ -1,7 +1,4 @@
-# Tests for the "Voice reference" setting: which recordings /speak copies the voice from,
-# and that the page + log are told EXACTLY which ones were sent.
-# (Bug this guards against: an uploaded recording was silently ignored because the
-# user also had recorded clips, so the website's voice was copied from other audio.)
+# Voice reference setting: no silent swaps, and exactly which clips were sent.
 import base64
 import csv
 import io
@@ -94,7 +91,7 @@ def set_mode(user, mode):
     return client.post(f"/profiles/{user['id']}/voice_reference", data={"mode": mode})
 
 
-# ================= the setting itself =================
+# The setting itself
 
 def test_new_and_old_profiles_default_to_auto(store, user):
     assert store.get(user["id"])["voice_reference"] == "auto"
@@ -112,7 +109,7 @@ def test_unknown_setting_is_refused(user):
     assert "Unknown voice reference" in r.json()["error"]
 
 
-# ================= the bug: uploads + recorded clips =================
+# Uploads plus recorded clips (the original bug)
 
 def test_uploads_only_never_sends_recorded_clips(store, user, colab):
     add_upload(store, user, 18.0)
@@ -192,7 +189,7 @@ def test_stock_voice_ignores_the_setting(store, colab):
     assert colab["payload"]["stock_speaker"] == "Ana Florence"
 
 
-# ================= preview (shown in the Voice Bank before generating) =================
+# Preview (shown in the Voice Bank before generating)
 
 def test_preview_matches_what_speak_sends(store, user, colab):
     add_upload(store, user, 12.5)
@@ -209,7 +206,7 @@ def test_preview_explains_a_setting_that_cant_be_met(store, user):
     assert preview["clips"] == [] and "Guided takes only" in preview["error"]
 
 
-# ================= clip lengths =================
+# Clip lengths
 
 def test_webm_length_read_from_the_last_audio_block():
     times = list(range(0, 40000, 20))                              # 40 s of 20 ms Opus frames, 2 clusters
@@ -236,7 +233,7 @@ def test_recorded_clip_length_is_shown(store, user, colab):
     assert speak().json()["voice_reference"]["clips"][0]["duration_s"] == 19.92
 
 
-# ================= generation log =================
+# Generation log
 
 def log_rows():
     with open(backend.GENERATION_LOG, newline="", encoding="utf-8") as f:
@@ -271,7 +268,7 @@ def test_choose_references_error_is_a_profile_error(store, user):
         store.choose_references(user["id"], "neutral")
 
 
-# ================= one chosen upload, and F5 gets exactly one clip =================
+# One chosen upload, and F5 gets exactly one clip
 
 def test_a_specific_uploaded_clip_can_be_chosen(store, user, colab):
     add_upload(store, user, 29.4, name="Recording (3).m4a")      # more speech: "Auto" would pick it

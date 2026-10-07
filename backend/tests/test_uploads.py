@@ -1,6 +1,4 @@
-# Tests for uploading old recordings (for people who already lost their voice).
-# The browser sends a trimmed mono WAV; the server checks consent, file type,
-# size and trim before saving it.
+# Uploading old recordings: consent, file type, size and trim checks.
 import base64
 import io
 import json
@@ -41,7 +39,7 @@ def upload(wav=None, **fields):
                        files={"file": ("clip.wav", make_wav(5.0) if wav is None else wav, "audio/wav")})
 
 
-# ================= allowed formats =================
+# Allowed formats
 
 @pytest.mark.parametrize("name", ["note.mp3", "note.m4a", "note.wav", "PTT-2024.OGG", "note.opus",
                                   "clip.webm", "video.mp4"])
@@ -66,7 +64,7 @@ def test_audio_must_be_mono_16bit_wav(user):
     assert upload(wav=make_wav(5.0, rate=96000)).status_code == 400
 
 
-# ================= consent =================
+# Consent
 
 @pytest.mark.parametrize("consent, name", [("false", "Ravi"), ("true", ""), ("true", "   "), ("", "Ravi")])
 def test_consent_and_name_are_required(user, consent, name):
@@ -84,7 +82,7 @@ def test_who_consented_and_when_is_stored(store, user):
     assert clip["consented_at"].startswith("20")           # ISO date-time
 
 
-# ================= size limit =================
+# Size limit
 
 def test_size_limit(user):
     too_big = make_wav(5.0) + b"\x00" * (MAX_UPLOAD_BYTES + 10)
@@ -93,7 +91,7 @@ def test_size_limit(user):
     assert "too big" in r.json()["error"]
 
 
-# ================= trim validation =================
+# Trim validation
 
 @pytest.mark.parametrize("start, end, why", [
     ("5", "5", "after"),            # zero length
@@ -128,7 +126,7 @@ def test_non_number_trim_is_rejected(user):
     assert upload(start_s="soon").status_code == 422      # FastAPI refuses it before our code
 
 
-# ================= list, totals, delete, limits =================
+# List, totals, delete, limits
 
 def test_totals_and_enough_speech_warning(user):
     r = upload(speech_s="4.0").json()
@@ -175,7 +173,7 @@ def test_wav_duration_helper():
         wav_duration(b"RIFF....nope")
 
 
-# ================= used as the voice for BOTH engines =================
+# Used as the voice for BOTH engines
 
 class FakeOk:
     status_code = 200
