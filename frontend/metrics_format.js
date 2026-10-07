@@ -1,15 +1,4 @@
-// ============================================================
-// ReVoice — Turning voice metrics into readable lines
-// ============================================================
-// Pure functions, no DOM (tested with Node).
-// Colab measures every generated sentence (see Step 4a of the notebook):
-//   similarity : how close the output voice is to the real voice (1 = identical)
-//   pitch      : average pitch in Hz, and its range
-//   rate       : words per second of actual speech
-//   accent     : the 3 most likely English accents with RAW scores (-1..1, NOT %)
-//                + seconds of speech; read with the rules below (same as backend/accent.py)
-// Any of these can be null (not measured); we then show "n/a".
-// ============================================================
+// Turns Colab's voice metrics into readable lines; null values show as "n/a".
 
 const ACCENT_NAMES = {
   england: "England", us: "US", canada: "Canada", australia: "Australia", indian: "Indian",
@@ -24,10 +13,8 @@ export function accentName(label) {
   return label ? (ACCENT_NAMES[label] || label) : "n/a";
 }
 
-// ---- reading the accent estimate (SAME rules as backend/accent.py) ----
-// Under 3 s of speech: too short to say. Confidence = how far the top score is ahead
-// of the second (under 0.05 low, under 0.15 medium, else high). These are judgement
-// calls from our own clips, not calibrated probabilities, so no percentages are shown.
+// Accent rules, same as backend/accent.py: under 3 s of speech is too short; confidence is the
+// lead over second place (not calibrated, so no percentages are shown).
 export const MIN_ACCENT_SPEECH_SECONDS = 3.0;
 export const LOW_MARGIN = 0.05;
 export const HIGH_MARGIN = 0.15;
@@ -45,7 +32,7 @@ export function judgeAccent(stats) {
   return { status: "ok", label: top[0][0], top, margin, confidence, speechSeconds: speech };
 }
 
-// Same accent as the real voice? match: true/false, or null + reason when it can't be judged fairly
+// same accent as the real voice? true/false, or null with a reason when it can't be judged fairly
 export function compareAccents(ref, out) {
   const problem = (j, who) =>
     j.status === "too_short" ? `${who} too short` : j.status !== "ok" ? `${who} not measured`
@@ -62,7 +49,7 @@ function accentText(j) {
   return `${scores} (${j.confidence} confidence)`;
 }
 
-// The accent lines under a player (only when "Show accent estimates" is ticked)
+// accent lines, shown only with "Show accent estimates"
 export function accentLines(metrics) {
   const out = judgeAccent(metrics.output);
   if (!metrics.reference) return [`Accent (estimate): output ${accentText(out)}`];   // stock voice
@@ -87,14 +74,13 @@ function rateText(stats) {
   return stats && isNum(stats.words_per_sec) ? stats.words_per_sec.toFixed(1) : "n/a";
 }
 
-// Similarity is a cosine (-1..1); for people it's shown on a 0-1 scale.
+// similarity is a cosine (-1..1), shown on a 0-1 scale
 export function similarityValue(metrics) {
   const s = metrics?.similarity;
   return isNum(s) ? Math.max(0, Math.min(1, s)) : null;
 }
 
-// The lines shown under a player. Returns [] if there are no metrics at all.
-// Accent lines only with { showAccent: true } (hidden by default: see the page setting).
+// lines under a player ([] without metrics); accent lines only with { showAccent: true }
 export function metricsLines(metrics, { showAccent = false } = {}) {
   if (!metrics) return [];
   const ref = metrics.reference, out = metrics.output;
@@ -108,7 +94,7 @@ export function metricsLines(metrics, { showAccent = false } = {}) {
   return lines;
 }
 
-// Compare mode: which engine sounded more like the person? null if it can't be decided.
+// Compare mode: the engine with higher similarity, or null if it can't be decided
 export function moreSimilarEngine(metricsByEngine) {
   let best = null, bestValue = -1, tie = false;
   for (const [engine, metrics] of Object.entries(metricsByEngine)) {
@@ -121,9 +107,7 @@ export function moreSimilarEngine(metricsByEngine) {
   return measured >= 2 && !tie ? best : null;
 }
 
-// ---- which recordings the voice was copied from (sent back by /speak) ----
-// e.g. ["Voice copied from 1 clip (setting: Uploaded recordings only):",
-//       "uploaded · Recording (2).m4a (#000001) · 18.0 s"]
+// "Voice copied from..." lines for the recordings /speak reports it sent
 const SOURCE_NAMES = {
   emotion_clips: "emotion recording", uploaded_recordings: "uploaded", guided_references: "guided take",
 };

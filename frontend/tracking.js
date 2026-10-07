@@ -1,18 +1,7 @@
-// ============================================================
-// ReVoice — Tracking helpers
-// ============================================================
-// This file has no camera or UI code. It only does the math:
-//   1. OneEuroFilter   -> smooths a shaky pointer
-//   2. PointerTracker  -> smoothing + ignores brief tracking dropouts
-//   3. detectLaserBlob -> finds a laser dot in an image
-//   4. DwellSelector   -> decides when a cell has really been "selected"
-// ============================================================
+// Pointer maths with no DOM: smoothing, laser-dot detection and dwell selection.
 
 
-// ---------- 1. ONE EURO FILTER ----------
-// A standard filter for pointers/cursors.
-// When your hand is still, it smooths a lot (no jitter).
-// When your hand moves fast, it smooths less (no lag).
+// One Euro filter: smooths a lot when the pointer is still (no jitter), little when it moves fast (no lag).
 class LowPass {
   constructor() { this.y = null; }
   filter(x, alpha) {
@@ -23,8 +12,7 @@ class LowPass {
 }
 
 export class OneEuroFilter {
-  // minCutoff: lower = smoother when still (but slightly more lag)
-  // beta:      higher = more responsive when moving fast
+  // minCutoff: lower = steadier when still, slightly more lag; beta: higher = less lag when fast
   constructor(minCutoff = 1.0, beta = 0.01, dCutoff = 1.0) {
     this.minCutoff = minCutoff;
     this.beta = beta;
@@ -63,9 +51,7 @@ export class OneEuroFilter {
 }
 
 
-// ---------- 2. POINTER TRACKER ----------
-// Smooths x and y separately, and keeps the last position for a few
-// frames if tracking briefly drops out (so the pointer doesn't flicker).
+// Smooths x and y, and keeps the last position through brief tracking dropouts.
 export class PointerTracker {
   constructor({ minCutoff = 0.8, beta = 0.015, maxLostFrames = 10 } = {}) {
     this.fx = new OneEuroFilter(minCutoff, beta);
@@ -98,18 +84,14 @@ export class PointerTracker {
 }
 
 
-// ---------- 3. LASER DOT DETECTION ----------
-// Instead of trusting one single pixel, this:
-//   a) finds every separate patch of bright red pixels
-//   b) throws away patches that are too tiny (noise) or too big (a red shirt,
-//      a red wall) — a laser dot is always a SMALL patch
-//   c) picks the brightest remaining patch and returns its centre
+// Laser dot: the brightest SMALL patch of red pixels. Size limits reject noise (too small)
+// and red objects like a shirt (too big).
 export function detectLaserBlob(data, width, height, opts = {}) {
   const {
     minBrightness = 220,    // red channel must be at least this bright
     minRedDominance = 60,   // red must beat green/blue by this much
-    minPixels = 2,          // smaller patches are treated as noise
-    maxPixels = 120,        // bigger patches are treated as "not a laser dot"
+    minPixels = 2,          // smaller patches are noise
+    maxPixels = 120,        // bigger patches aren't a laser dot
   } = opts;
 
   const total = width * height;
@@ -153,7 +135,7 @@ export function detectLaserBlob(data, width, height, opts = {}) {
       }
     }
 
-    if (count < minPixels || count > maxPixels) continue;   // noise or big red object
+    if (count < minPixels || count > maxPixels) continue;
     if (!best || peak > best.peak) {
       best = { x: sumX / sumW, y: sumY / sumW, count, peak };
     }
@@ -163,12 +145,8 @@ export function detectLaserBlob(data, width, height, opts = {}) {
 }
 
 
-// ---------- 4. DWELL SELECTOR ----------
-// Decides when a cell is really selected:
-//   - the pointer must be in a NEW cell for a few frames before we switch
-//     (so shaking on a border doesn't flip between two letters)
-//   - then it must stay there for dwellMs to select
-//   - to type the same letter again, you wait a little longer
+// Dwell selection. A new cell must hold for switchFrames frames before it counts, so jitter on
+// a border doesn't flip between two letters; repeating the same letter waits repeatExtraMs longer.
 export class DwellSelector {
   constructor({ dwellMs = 1500, switchFrames = 4, repeatExtraMs = 800 } = {}) {
     this.dwellMs = dwellMs;

@@ -1,18 +1,5 @@
-// ============================================================
-// ReVoice — Recording quality checks
-// ============================================================
-// Pure maths, no browser/DOM code (so it can be tested with Node).
-// Given the audio samples of a recording (numbers between -1 and 1),
-// spot the two problems that ruin voice-cloning training data:
-//   - TOO QUIET: the voice barely reached the microphone
-//   - CLIPPING:  too loud, the waveform got cut off (sounds distorted)
-//
-// Why not just look at the loudest sample? Because one click when the
-// microphone starts would make a whisper-quiet take look fine. Instead we
-// cut the audio into short chunks, measure each chunk's loudness, and use
-// the loudness of the louder speech parts (90th percentile), which a single
-// click can't change.
-// ============================================================
+// Flags recordings that are too quiet or clipping. Loudness uses the 90th-percentile
+// 10 ms chunk level, so a single click at the start can't hide a quiet take.
 
 export function analyzeLevels(samples, {
   chunkSize = 480,        // samples per chunk (10 ms at 48 kHz)
@@ -20,7 +7,7 @@ export function analyzeLevels(samples, {
   clipLevel = 0.99,       // a sample this close to the max counts as "clipped"
   maxClippedShare = 0.001 // more than 0.1% clipped samples = distorted
 } = {}) {
-  // loudness (RMS) of each chunk, and count clipped samples
+  // RMS per chunk, and clipped samples
   const chunkLevels = [];
   let clipped = 0, peak = 0;
   for (let start = 0; start < samples.length; start += chunkSize) {
@@ -35,7 +22,7 @@ export function analyzeLevels(samples, {
     chunkLevels.push(Math.sqrt(sumSquares / (end - start)));
   }
 
-  // the level that 90% of chunks are quieter than = "how loud the speech is"
+  // 90th-percentile chunk level = speech level
   chunkLevels.sort((a, b) => a - b);
   const speechLevel = chunkLevels.length
     ? chunkLevels[Math.min(chunkLevels.length - 1, Math.floor(chunkLevels.length * 0.9))]
@@ -49,7 +36,6 @@ export function analyzeLevels(samples, {
   return { peak, speechLevel, clippedShare, problems };
 }
 
-// Friendly messages for each problem
 export const PROBLEM_MESSAGES = {
   too_quiet: "Very quiet. Move closer to the microphone and redo.",
   clipping: "Too loud (distorted). Move back a little and redo.",
