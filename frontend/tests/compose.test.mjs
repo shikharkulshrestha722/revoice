@@ -1,5 +1,4 @@
-// Tests for compose.js: the ONE composed sentence, changed by the pointer and by typing.
-// Run from the project root:  node --test "frontend/tests/*.test.mjs"
+// Tests for compose.js: one sentence changed by the pointer and by typing.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { emptySentence, pointerKey, choosePrediction, typed, textBoxKeyAction, isTypingTarget,

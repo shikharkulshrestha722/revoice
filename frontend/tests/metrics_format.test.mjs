@@ -1,11 +1,10 @@
-// Tests for metrics_format.js (metrics are made up, like a mocked Colab reply).
-// Run from the project root:  node --test "frontend/tests/*.test.mjs"
+// Tests for metrics_format.js, with mocked Colab metrics.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { metricsLines, moreSimilarEngine, similarityValue, accentName, judgeAccent, compareAccents,
          accentLines, MIN_ACCENT_SPEECH_SECONDS, LOW_MARGIN, HIGH_MARGIN } from "../metrics_format.js";
 
-// Colab v8 style. Accent scores are REAL ones the model gave on the project's recordings.
+// Colab v8 format; accent scores are real ones from the project's recordings.
 const UPLOAD = { speech_seconds: 17.7, accent_scores: [["indian", 0.613], ["us", 0.529], ["african", 0.328]] };
 const MIC_CLIP = { speech_seconds: 19.1, accent_scores: [["indian", 0.641], ["us", 0.611], ["philippines", 0.331]] };
 const CLEAR_CLIP = { speech_seconds: 13.2, accent_scores: [["indian", 0.631], ["us", 0.412], ["wales", 0.272]] };

@@ -1,8 +1,5 @@
-// Checks that the upload conversion does NOT change the voice:
-// (decoded audio) -> mono -> trim -> 24 kHz -> 16-bit WAV.
-// The test signals are maths formulas, so we can also work out the PERFECT 24 kHz
-// version and compare the converted WAV with it sample by sample.
-// Run from the project root:  node --test "frontend/tests/*.test.mjs"
+// The upload conversion must not change the voice. Test signals are formulas, so the ideal
+// 24 kHz version can be computed and compared with the converted WAV sample by sample.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { convertForUpload, encodeWav16, readWav16, resample } from "../audio_prep.js";
@@ -14,9 +11,7 @@ const sampled = (fn, rate, seconds) => Float32Array.from({ length: Math.round(ra
 
 const tone440 = (t) => 0.5 * Math.sin(2 * Math.PI * 440 * t);
 
-// "speech-like": a 120 Hz voice with harmonics up to 5 kHz (louder around 500 Hz and
-// 1.5 kHz, like vowel formants), a slow pitch wobble, and 4 "syllables" per second
-// with short gaps between them
+// speech-like: 120 Hz voice, harmonics to 5 kHz with formant-like peaks, 4 syllables per second
 const F0 = 120;
 function speechLike(t) {
   // phase of a pitch that wobbles +-3 Hz around 120 Hz, 0.7 times a second

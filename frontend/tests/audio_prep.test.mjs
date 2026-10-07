@@ -1,4 +1,4 @@
-// Tests for audio_prep.js.  Run from the project root:  node --test "frontend/tests/*.test.mjs"
+// Tests for audio_prep.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {

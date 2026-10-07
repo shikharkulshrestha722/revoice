@@ -1,4 +1,4 @@
-// Tests for selection_stats.js.  Run from the project root:  node --test "frontend/tests/*.test.mjs"
+// Tests for selection_stats.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { selectionSavings, tidyText } from "../selection_stats.js";

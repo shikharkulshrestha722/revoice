@@ -1,4 +1,4 @@
-// Tests for audio_checks.js.  Run from the project root:  node --test frontend/tests
+// Tests for audio_checks.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { analyzeLevels } from "../audio_checks.js";
