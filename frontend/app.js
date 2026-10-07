@@ -1,11 +1,4 @@
-// ============================================================
-// ReVoice — Frontend Logic
-// ============================================================
-// 1. Turn on the webcam (mirrored, like a selfie camera)
-// 2. Track a pointer: your index fingertip (Finger mode) or a laser dot
-// 3. Smooth the pointer and select letters by holding still (dwell)
-// 4. Record voice bank clips and speak via the backend -> Colab
-// ============================================================
+// Page logic: camera and pointer tracking, letter grid, profiles, voice bank and speech.
 
 import { PointerTracker, DwellSelector, detectLaserBlob } from "./tracking.js";
 import { analyzeLevels, PROBLEM_MESSAGES } from "./audio_checks.js";
@@ -16,11 +9,10 @@ import { metricsLines, moreSimilarEngine, referenceLines } from "./metrics_forma
 import { mixToMono, convertForUpload, waveformPeaks, speechChunks, speechSecondsInRange,
          hasAllowedExtension } from "./audio_prep.js";
 
-// MediaPipe is loaded later, only when Finger mode needs it.
-// That way, if it fails to download, the camera still works.
+// MediaPipe loads on first use of Finger mode, so a failed download can't break the camera.
 const MEDIAPIPE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 
-// ---------- SETTINGS YOU CAN TUNE ----------
+// Settings you can tune
 const SETTINGS = {
   dwellMs: 1500,        // how long to hold on a letter to select it
   repeatExtraMs: 800,   // extra wait before the SAME letter types again
@@ -33,7 +25,7 @@ const SETTINGS = {
   suggestionCount: 3,
 };
 
-// ---------- ELEMENTS ----------
+// Elements
 const video = document.getElementById("webcam");
 const overlay = document.getElementById("overlay");
 const ctx = overlay.getContext("2d");
@@ -41,15 +33,12 @@ const composedTextEl = document.getElementById("composedText");
 const trackModeEl = document.getElementById("trackMode");
 const trackStatusEl = document.getElementById("trackStatus");
 
-// ---------- MOTION ----------
+// Motion
 // People who set "reduce motion" on their computer get no decorative animation.
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 const scrollMotion = () => (reducedMotion.matches ? "auto" : "smooth");
 
-// ---------- TOASTS ----------
-// Small notices in the bottom-right corner. They are EXTRA: the normal status
-// text is still shown too. Success notices go away after 4 s; errors stay until
-// the caregiver closes them, so an error can never be missed.
+// Toasts are extra to the status text; errors stay until closed so they can't be missed.
 function showToast(message, type = "success") {
   const box = document.getElementById("toasts");
   const toast = document.createElement("div");
@@ -70,9 +59,7 @@ function showToast(message, type = "success") {
   if (all.length > 4) (all.find((t) => !t.classList.contains("toast-error")) || all[0]).remove();
 }
 
-// ---------- THEME (light / dark) ----------
-// Default: follow the system setting. Pressing the header button picks one
-// and remembers it (index.html applies the saved choice before the page draws).
+// Theme: follows the system until the toggle saves a choice (applied early in index.html).
 const THEME_KEY = "revoice-theme";
 const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
 const themeToggle = document.getElementById("themeToggle");
@@ -98,8 +85,7 @@ function setTheme(theme) {
     try { localStorage.setItem(THEME_KEY, theme); } catch { /* not saved, still switches */ }
     updateThemeToggle();
   };
-  // a quick cross-fade between the old and new look (browser "view transition");
-  // instant if the browser can't, or if reduced motion is on
+  // cross-fade with a view transition; instant if unsupported or with reduced motion
   if (document.startViewTransition && !reducedMotion.matches) document.startViewTransition(apply);
   else apply();
 }
@@ -113,7 +99,7 @@ scanCanvas.width = SETTINGS.scanWidth;
 scanCanvas.height = SETTINGS.scanHeight;
 const scanCtx = scanCanvas.getContext("2d", { willReadFrequently: true });
 
-// ---------- GRID ----------
+// Grid
 const GRID_ROWS = 5;
 const GRID_COLS = 6;
 const GRID_LETTERS = [
@@ -124,9 +110,8 @@ const GRID_LETTERS = [
   "Y","Z","SPACE","DEL","_","_"
 ];
 
-// ---------- STATE ----------
-// The composed sentence: { text, selections, typed } (see compose.js). The pointer and
-// the text box change the SAME sentence, always through setSentence() below.
+// State
+// The composed sentence { text, selections, typed }; change it only through setSentence().
 let sentence = emptySentence();
 let handLandmarker = null;
 let handLoading = false;
@@ -149,7 +134,7 @@ const dwell = new DwellSelector({
   repeatExtraMs: SETTINGS.repeatExtraMs,
 });
 
-// ---------- FINGER TRACKER (MediaPipe) ----------
+// Finger tracker (MediaPipe)
 async function loadHandTracker() {
   if (handLandmarker || handLoading) return;
   handLoading = true;
@@ -191,7 +176,7 @@ trackModeEl.onchange = () => {
   else trackStatusEl.textContent = "Laser mode — aim a red laser dot at the grid.";
 };
 
-// ---------- CAMERA ----------
+// Camera
 document.getElementById("startCamBtn").onclick = async () => {
   // Camera only works on http://localhost or https — not when opening the file directly
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
@@ -248,9 +233,9 @@ document.getElementById("startCamBtn").onclick = async () => {
 window.__revoiceLoaded = true;
 trackStatusEl.textContent = "Ready. Click Start Camera.";
 refreshSuggestions();        // show starter phrases straight away
-// (users + voice bank are loaded at the very end of this file)
+// users and the voice bank are loaded at the end of this file
 
-// ---------- MAIN LOOP ----------
+// Main loop
 function loop() {
   if (video.readyState >= 2) {
     const W = overlay.width, H = overlay.height;
@@ -310,10 +295,8 @@ function getRawPoint(now) {
   return { x: blob.x * (W / SW), y: blob.y * (H / SH) };
 }
 
-// ---------- DRAWING ----------
-// Colours come from the CSS theme variables (--canvas-* in style.css), so the
-// overlay matches light/dark mode. They're read ONCE here and again only when the
-// theme changes -- never inside the frame loop, which must stay fast.
+// Drawing
+// Overlay colours come from CSS variables, read at start and on theme change, never per frame.
 const overlayColors = {};
 const OVERLAY_FONT = '"Atkinson Hyperlegible", "Segoe UI", Arial, sans-serif';
 const labelChipWidths = {};      // label -> chip width (measured once)
@@ -371,8 +354,7 @@ function drawGrid(activeCell) {
       strokeCell(x, y, cellW, cellH);
 
       if (label && label !== "_") {
-        // solid "chip" behind the letter: readable over any camera background.
-        // Chip width fits the label (SPACE/DEL are wider); measured once, then cached.
+        // solid chip behind each label, readable over any video; widths measured once and cached
         const chipW = labelChipWidths[label] ??= Math.max(64, ctx.measureText(label).width + 20);
         ctx.fillStyle = overlayColors.chip;
         ctx.fillRect(x + cellW / 2 - chipW / 2, y + cellH / 2 - 15, chipW, 30);
@@ -479,7 +461,7 @@ function drawSuggestionBar(activeCell) {
   }
 }
 
-// ---------- ASK THE BACKEND FOR PREDICTIONS ----------
+// Predictions
 function refreshSuggestions() {
   clearTimeout(predictTimer);
   predictTimer = setTimeout(async () => {
@@ -504,11 +486,8 @@ function refreshSuggestions() {
   }, 250);   // wait a moment so we don't fire on every single letter
 }
 
-// ---------- SELECTION COUNTER ----------
-// Counts every pointer selection for the current sentence, and compares it
-// with spelling the sentence letter by letter (see selection_stats.js).
-// Each sentence gets a random id so the log counts it once, even if it is
-// spoken twice or with "Compare both".
+// Selection counter
+// A random id per sentence lets the log count it once, even when spoken twice or compared.
 let utteranceId = crypto.randomUUID();
 
 function updateSelectionStats() {
@@ -529,8 +508,8 @@ function updateSelectionStats() {
     `(${s.letters} letters + ${s.spaces} spaces) · saved by prediction: ${s.savedPct}%`;
 }
 
-// ---------- TEXT ----------
-// The selected cell lights up briefly, so the patient SEES that it was chosen.
+// Text
+// The selected cell flashes so the patient sees it was chosen.
 const FLASH_MS = 280;
 let flash = null;                 // { cell, start } of the last selection
 
@@ -548,8 +527,7 @@ function drawSelectionFlash(now) {
   if (!flash) return;
   const elapsed = now - flash.start;
   if (elapsed > FLASH_MS) { flash = null; return; }
-  // fades out normally; with reduced motion it's a steady highlight (still clear feedback).
-  // A light tint + a bold outline: obvious, but the label underneath stays readable.
+  // fades out, or a steady highlight with reduced motion; tint + outline keep the label readable
   const [x, y, w, h] = cellRect(flash.cell);
   ctx.globalAlpha = reducedMotion.matches ? 1 : 1 - elapsed / FLASH_MS;
   ctx.fillStyle = overlayColors.flash;
@@ -562,8 +540,7 @@ function drawSelectionFlash(now) {
   ctx.globalAlpha = 1;
 }
 
-// The one place the sentence changes. fromTextBox: the box already shows it (don't
-// rewrite the box while someone types, or the cursor would jump to the end).
+// The only place the sentence changes. fromTextBox: don't rewrite the box while typing (the cursor would jump).
 function setSentence(next, { fromTextBox = false } = {}) {
   if (next === sentence) return;
   sentence = next;
@@ -587,8 +564,7 @@ function selectCell(cellIndex) {
   setSentence(pointerKey(sentence, label));      // added at the END, even after typed text
 }
 
-// ---------- TYPING (caregivers, testing, users who can still type) ----------
-// The text box IS the composed sentence. Pointer selection stays the main input.
+// Typing: the text box is the composed sentence; pointer selection stays the main input.
 composedTextEl.addEventListener("input", () => {
   const oneLine = composedTextEl.value.replace(/\r?\n/g, " ");   // pasted text: keep it one line
   if (oneLine !== composedTextEl.value) composedTextEl.value = oneLine;
@@ -600,8 +576,7 @@ composedTextEl.addEventListener("keydown", (e) => {
   if (action === "speak") document.getElementById("speakBtn").click();
 });
 
-// The 3 predictions as buttons too, for mouse/keyboard users (the patient picks them on
-// the camera overlay). Picking one replaces the text, exactly like the pointer does.
+// Predictions as buttons for mouse/keyboard users; picking one replaces the text, like the pointer.
 function renderPredictionButtons() {
   const box = document.getElementById("predictionButtons");
   box.replaceChildren(...suggestions.map((phrase, i) => {
@@ -618,9 +593,7 @@ document.getElementById("clearBtn").onclick = () => {
   setSentence(emptySentence());
 };
 
-// ---------- USER PROFILES ----------
-// Each user has their own saved voice (recordings) or a stock voice.
-// These controls are for the CAREGIVER, so mouse-only is fine here.
+// User profiles (caregiver controls, so mouse-only is fine)
 let profiles = [];
 let activeProfile = null;     // the selected user, or null if there are none
 
@@ -719,7 +692,7 @@ document.getElementById("deleteUserBtn").onclick = async () => {
   showToast(`Deleted "${name}" and their recordings.`);
 };
 
-// ---------- ADD USER PANEL ----------
+// Add user panel
 const addUserPanel = document.getElementById("addUserPanel");
 
 function chosenVoiceType() {
@@ -802,7 +775,7 @@ document.getElementById("createUserBtn").onclick = async () => {
     return;
   }
 
-  // reset the form for next time, close it, and show the new (selected) user
+  // reset and close the form, then show the new (selected) user
   document.getElementById("newName").value = "";
   document.getElementById("consent").checked = false;
   addUserPanel.hidden = true;
@@ -815,8 +788,8 @@ document.getElementById("createUserBtn").onclick = async () => {
   if (voiceType === "upload") openUploadPanel();
 };
 
-// ---------- MICROPHONE (shared by both recorders) ----------
-// turn OFF browser "improvements" — they distort the voice and hurt cloning
+// Microphone (shared by both recorders)
+// browser echo/noise/gain processing is off: it distorts the voice and hurts cloning
 function getMicStream() {
   return navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
@@ -829,7 +802,7 @@ function makeRecorder(stream) {
   return new MediaRecorder(stream, options);
 }
 
-// ---------- VOICE BANK RECORDING ----------
+// Voice bank recording
 const RECORD_SECONDS = 20;   // longer clips = more accurate voice cloning
 let activeRecorder = null;   // so a second click can stop recording early
 
@@ -849,8 +822,7 @@ async function updateVoiceBankStatus() {
       ? `${n} clip(s) saved for "${emotion}" (${activeProfile.name}). 2-3 gives the best result.`
       : `No clips recorded yet for "${emotion}" (${activeProfile.name}).`;
 
-    // exactly which recordings the NEXT generation will copy the voice from
-    // (F5 gets one clip, XTTS all of them, so "Compare both" shows each engine)
+    // the recordings the next generation will use (F5 gets one clip, XTTS all; Compare shows both)
     const pid = encodeURIComponent(activeProfile.id);
     const preview = (engine) => fetch(`/voice_bank/references?profile_id=${pid}` +
       `&emotion=${encodeURIComponent(emotion)}&engine=${engine}`).then((r) => r.json());
@@ -868,8 +840,7 @@ async function updateVoiceBankStatus() {
 document.getElementById("emotion").onchange = updateVoiceBankStatus;
 document.getElementById("engine").addEventListener("change", updateVoiceBankStatus);
 
-// The uploaded-clip picker, shown with "Uploaded recordings only": all uploads
-// (most speech first), or ONE chosen clip so a weaker upload is never picked by itself.
+// Uploaded-clip picker for "Uploaded recordings only": all uploads, or one chosen clip.
 async function updateReferenceClipChoice() {
   const select = document.getElementById("referenceClip");
   select.hidden = activeProfile?.voice_reference !== "uploads";
@@ -985,28 +956,24 @@ document.getElementById("recordBtn").onclick = async () => {
   autoStop = setTimeout(() => recorder.state === "recording" && recorder.stop(), RECORD_SECONDS * 1000);
 };
 
-// ---------- SPEAK ----------
+// Speak
 const ENGINE_NAMES = { xtts: "XTTS-v2", f5: "F5-TTS" };
 let speaking = false;   // stops a second click starting another generation
 
-// Empties a player, so if the next request fails nobody mistakes the
-// PREVIOUS sentence's audio for the new one.
+// Clears a player so a failed request can't leave the previous sentence's audio playing.
 function clearPlayer(audio) {
   audio.pause();
   audio.removeAttribute("src");
   audio.load();                 // makes the browser actually drop the old audio
 }
 
-// F5 copies the voice from one reference clip plus a transcript of it (made by
-// Whisper on Colab). Showing the transcript lets you spot a bad reference:
-// if it doesn't match what was said, re-record the clip.
+// F5's transcript of its reference (Whisper): if it doesn't match what was said, re-record.
 function showRefText(el, refText) {
   el.hidden = !refText;
   el.textContent = refText ? `F5 heard the reference recording as: "${refText}"` : "";
 }
 
-// "Show accent estimates" (caregiver setting, remembered in this browser; off by default
-// because the accent classifier is rough on short sentences).
+// "Show accent estimates": remembered per browser, off by default (rough on short sentences).
 const SHOW_ACCENT_KEY = "revoice.showAccent";
 const showAccentEl = document.getElementById("showAccent");
 try { showAccentEl.checked = localStorage.getItem(SHOW_ACCENT_KEY) === "yes"; } catch { /* stays hidden */ }
@@ -1015,8 +982,7 @@ showAccentEl.onchange = () => {
   for (const el of document.querySelectorAll(".metrics")) showMetrics(el, el.metricsData);   // redraw results on screen
 };
 
-// Voice metrics measured on Colab (similarity, pitch, rate, accent), one line each.
-// Shows nothing if there are none (e.g. metrics switched off on Colab).
+// Colab's voice metrics, one line each; nothing if there are none.
 function showMetrics(el, metrics) {
   el.metricsData = metrics;            // kept so the accent setting can redraw it
   const lines = metricsLines(metrics, { showAccent: showAccentEl.checked });
@@ -1040,11 +1006,8 @@ function showRefUsed(el, ref, prefix = "") {
   el.hidden = lines.length === 0;
 }
 
-// Asks the backend for speech from ONE engine.
-// Returns { audioSrc, seconds, refText, metrics, voiceReference } or throws an Error with a readable message.
-// counted = false for the Test sentence: it isn't the patient's sentence, so it must
-// not count in the "selections saved" evidence. A typed sentence still gets its
-// utterance id and input method, but no selection count (typing isn't pointing).
+// Speech from one engine: { audioSrc, seconds, refText, metrics, voiceReference }, or throws.
+// counted = false for the Test sentence; typed sentences send no selection count (typing isn't pointing).
 async function requestSpeech(engine, text, emotion, counted = true) {
   const formData = new FormData();
   formData.append("text", text);
@@ -1070,8 +1033,7 @@ async function requestSpeech(engine, text, emotion, counted = true) {
            voiceReference: data.voice_reference || null };
 }
 
-// The exact sentence Colab's Step 4b test speaks (backend/parity_check.py uses it too),
-// spoken with "neutral" like Step 4b, so website and Colab scores can be compared fairly.
+// Colab Step 4b's exact sentence (a test keeps them in sync), spoken neutral for a fair comparison.
 const TEST_SENTENCE = "Hello, this is a quick test of my cloned voice. Does it sound like me?";
 
 document.getElementById("speakBtn").onclick = () =>
@@ -1094,7 +1056,7 @@ async function speak(text, emotion, counted) {
   document.getElementById("speakBusy").hidden = false;    // animated "generating" dots
   try {
     if (engine !== "both") {
-      // --- one engine, one player ---
+      // one engine
       compareBox.hidden = true;
       singleAudio.hidden = false;
       const refTextEl = document.getElementById("refTextSingle");
@@ -1120,9 +1082,7 @@ async function speak(text, emotion, counted) {
       return;
     }
 
-    // --- "Compare both": XTTS first, THEN F5 ---
-    // One after the other, not at the same time: both models share one Colab GPU,
-    // so running them together would make both slower and the timings unfair.
+    // Compare: XTTS then F5, one at a time, since they share one GPU (keeps timings fair)
     clearPlayer(singleAudio);
     singleAudio.hidden = true;
     compareBox.hidden = false;
@@ -1180,11 +1140,7 @@ async function speak(text, emotion, counted) {
 }
 
 
-// ---------- GUIDED VOICE BANKING ----------
-// The person reads one sentence at a time. Each take is uploaded with the
-// sentence id, so the server stores it next to its EXACT words.
-// Set up by the person banking their voice (or a caregiver), so mouse +
-// keyboard is fine here.
+// Guided voice banking: each take is saved with its sentence id (exact words). Caregiver screen.
 const GUIDED_MAX_SECONDS = 30;   // stop automatically after this (long sentences, slow speech)
 const guided = {
   sentences: [],        // [{id, text}] from the server
@@ -1266,7 +1222,7 @@ function showGuidedProgress() {
     : "Tip: after 8-10 sentences, use them as voice references so speech works without separate clips.";
 }
 
-// ----- sessions: the list is split into blocks of ~50 so it can be done over several sittings -----
+// sessions of ~50 sentences, for several sittings
 const sessionOf = (index) => Math.floor(index / guided.sessionSize);
 const sessionCount = () => Math.ceil(guided.sentences.length / guided.sessionSize);
 const sessionRange = (n) => [n * guided.sessionSize,
@@ -1330,8 +1286,7 @@ function goToGuided(index) {
   showGuidedSentence();
 }
 
-// after a good take: go to the next sentence still to do IN THIS SESSION;
-// when the session is finished, suggest a break and move on
+// after a good take, go to the next unrecorded sentence in this session; suggest a break when it's done
 function goToNextGuided() {
   const st = guided.status;
   const current = sessionOf(guided.index);
@@ -1485,8 +1440,7 @@ guidedEl("guidedRefsBtn").onclick = async () => {
   showGuidedProgress();
 };
 
-// keyboard shortcuts, only while the panel is open and you're not typing in a box
-// (e.g. in the composed-sentence text box: Space there must type a space, not record)
+// shortcuts only while the panel is open and not while typing (Space must type a space in a text box)
 document.addEventListener("keydown", (e) => {
   if (guidedEl("guidedPanel").hidden || isTypingTarget(e.target)) return;
   if (e.code === "Space") { e.preventDefault(); toggleGuidedRecording(); }
@@ -1495,12 +1449,7 @@ document.addEventListener("keydown", (e) => {
   else if (e.key.toLowerCase() === "p") playGuided();
 });
 
-// ---------- UPLOAD OLD RECORDINGS ----------
-// For someone who has already lost their voice. Everything happens in the browser:
-//   1. decode the file (mp3, voice note, video...) with the Web Audio API
-//   2. the caregiver drags two handles on the waveform to keep only the person's voice
-//   3. that part is mixed to mono, resampled to 24 kHz and saved as a WAV
-// Only that clean WAV is uploaded. Caregiver screen, so mouse-only is fine.
+// Upload old recordings: decoded, trimmed and converted in the browser; only the clean WAV is uploaded.
 const UPLOAD_RATE = 24000;            // sample rate of the uploaded WAV (what the voice models use)
 const MAX_CLIP_SECONDS = 120;         // same limits as the server
 const MIN_CLIP_SECONDS = 1;
@@ -1536,7 +1485,7 @@ function closeUploadPanel() {
 uploadEl("openUploadBtn").onclick = openUploadPanel;
 uploadEl("uploadCloseBtn").onclick = closeUploadPanel;
 
-// ----- 1. choosing files -----
+// choosing files
 uploadEl("uploadFiles").onchange = (e) => {
   for (const file of e.target.files) addUploadItem(file);
   e.target.value = "";            // so the same file can be chosen again later
@@ -1573,7 +1522,7 @@ async function addUploadItem(file) {
   drawUploadCard(item);
 }
 
-// ----- 2. one card per file: waveform + trim handles + preview -----
+// one card per file: waveform, trim handles, preview
 function buildUploadCard(item) {
   const card = document.createElement("div");
   card.className = "upload-card";
@@ -1697,9 +1646,7 @@ function previewItem(item) {
   upload.previewing = src;
 }
 
-// ----- 3. save: trim -> mono -> 24 kHz -> WAV -> upload -----
-// Done by our own tested code (audio_prep.js, see tests/upload_conversion.test.mjs),
-// not the browser's resampler, so we KNOW the voice isn't changed on the way.
+// save: trim, mono, 24 kHz WAV, upload; uses the tested audio_prep.js, not the browser's resampler
 function toUploadWav(item) {
   const { wav, clipped } = convertForUpload([item.mono], item.rate, item.start, item.end, UPLOAD_RATE);
   if (clipped) console.warn(`${item.name}: ${clipped} samples were too loud and had to be clipped`);
@@ -1749,7 +1696,7 @@ uploadEl("uploadSaveBtn").onclick = async () => {
   else showToast(`${toSave.length - saved} recording(s) could not be saved. See the list above.`, "error");
 };
 
-// ----- the clips already saved for this person -----
+// clips already saved for this person
 async function refreshSavedUploads() {
   const res = await fetch(`/uploads?profile_id=${encodeURIComponent(upload.profileId)}`);
   if (res.ok) showSavedUploads(await res.json());
@@ -1791,7 +1738,6 @@ function showSavedUploads(data) {
   }
 }
 
-// ---------- START ----------
-// Runs last, so everything above is defined before we load the users.
+// Start: runs last, so everything above is defined.
 loadProfiles();
 updateSelectionStats();
