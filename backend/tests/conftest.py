@@ -45,3 +45,14 @@ def switch(monkeypatch):
     monkeypatch.setattr(backend, "switch", fresh)
     monkeypatch.setattr(backend, "switch_hub", hub)
     return fresh
+
+
+@pytest.fixture(autouse=True)
+def no_real_serial_port(monkeypatch):
+    """Safety net: no test may open a real COM port (the Arduino could be plugged in)."""
+    import serial
+
+    def refuse(*args, **kwargs):
+        raise AssertionError(f"Test tried to open a REAL serial port: {args or kwargs}")
+    monkeypatch.setattr(serial, "Serial", refuse)
+    monkeypatch.setattr(serial, "serial_for_url", refuse)

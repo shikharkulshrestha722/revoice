@@ -5,6 +5,7 @@ requests
 python-dotenv
 pyserial          # single switch: reads the Arduino on a COM port
 websockets        # lets uvicorn serve /ws/switch
+pyautogui         # tools/twitch_to_space.py presses Space on each twitch
 
 # for running the tests (py -3.10 -m pytest)
 pytest
