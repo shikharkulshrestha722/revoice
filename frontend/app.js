@@ -680,7 +680,8 @@ function setScanningMode(on) {
       "If you miss, the rows start again."
     : "Hold the pointer still on a letter until the ring fills up.";
   clearInterval(scan.timer);
-  if (!on) { scanner.stop(); return; }
+  if (!on) { scanner.stop(); disconnectSwitch(); return; }
+  connectSwitch();
   trackStatusEl.textContent = "Scanning mode — no camera needed.";
   updateScanPredictions();
   buildScanGrid();
@@ -795,6 +796,57 @@ scanEl("scanClick").onchange = () => {
   if (scan.settings.clickSound) playScanClick();       // a click here also unlocks browser audio
 };
 showScanSettings();
+
+// Hardware switch: the backend reads the Arduino and sends {"state": "DOWN"|"UP"} over /ws/switch.
+// Only DOWN selects. Dropped connection (backend restarted) -> try again every 2 s.
+const switchLink = { socket: null, open: false, retryTimer: null, statusTimer: null, status: null };
+
+function connectSwitch() {
+  if (switchLink.socket) return;
+  const protocol = location.protocol === "https:" ? "wss" : "ws";
+  const socket = new WebSocket(`${protocol}://${location.host}/ws/switch`);
+  switchLink.socket = socket;
+  socket.onopen = () => { switchLink.open = true; refreshSwitchStatus(); };
+  socket.onmessage = (e) => { if (parseSwitchMessage(e.data) === "DOWN") handleSelect(); };
+  socket.onclose = () => {
+    if (switchLink.socket !== socket) return;           // an old socket we closed on purpose
+    switchLink.socket = null;
+    switchLink.open = false;
+    renderSwitchPill();
+    if (scan.active) switchLink.retryTimer = setTimeout(connectSwitch, 2000);
+  };
+  // the Arduino can be unplugged while the page stays connected: ask the backend every 3 s
+  clearInterval(switchLink.statusTimer);
+  switchLink.statusTimer = setInterval(refreshSwitchStatus, 3000);
+  refreshSwitchStatus();
+}
+
+function disconnectSwitch() {
+  clearTimeout(switchLink.retryTimer);
+  clearInterval(switchLink.statusTimer);
+  const socket = switchLink.socket;
+  switchLink.socket = null;
+  switchLink.open = false;
+  if (socket) socket.close();
+}
+
+async function refreshSwitchStatus() {
+  try {
+    const res = await fetch("/switch/status");
+    switchLink.status = res.ok ? await res.json() : null;
+  } catch {
+    switchLink.status = null;                            // backend not reachable
+  }
+  renderSwitchPill();
+}
+
+function renderSwitchPill() {
+  const { text, tone } = switchPillText(switchLink.status, switchLink.open);
+  const pill = scanEl("switchPill");
+  pill.textContent = text;
+  pill.className = `switch-pill ${tone}`;
+  pill.title = switchLink.status?.error || "";           // why it isn't connected, for the caregiver
+}
 
 // Spacebar = the switch (testing without hardware). Not while typing, and not while guided
 // banking is open (Space records there).
