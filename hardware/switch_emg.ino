@@ -1,11 +1,16 @@
 // ReVoice single switch: EMG muscle sensor -> prints "DOWN" / "UP" over USB at 9600 baud.
 // Wiring: sensor SIG -> A0, VCC -> 5V, GND -> GND. Keep still for 2 s after reset (baseline).
-// The backend (backend/switch_bridge.py) reads these lines; set SWITCH_SERIAL_PORT in backend/.env.
+// Read by backend/tools/twitch_to_space.py (Space key) OR backend/switch_bridge.py (SWITCH_SERIAL_PORT).
+
+// ===================== SETTINGS (backend/tools/emg_calibrate.py rewrites these) =====================
+const int THRESHOLD = 60;     // how far the muscle signal must rise above rest to count as a twitch
+const bool DEBUG = false;     // true: also print "raw,envelope,baseline" for the Serial Plotter
+                              // (the ReVoice tools ignore those lines; only DOWN/UP matter)
+// ====================================================================================================
 
 const int EMG_PIN = A0;
 float baseline = 0, envelope = 0;
 const float ENVELOPE_ALPHA = 0.1;
-const int THRESHOLD = 60;
 bool pressed = false;
 void setup() {
   Serial.begin(9600);
@@ -20,5 +25,8 @@ void loop() {
   bool active = (envelope - baseline) > THRESHOLD;
   if (active && !pressed) { pressed = true; Serial.println("DOWN"); }
   else if (!active && pressed) { pressed = false; Serial.println("UP"); }
+  if (DEBUG) {
+    Serial.print(raw); Serial.print(','); Serial.print(envelope); Serial.print(','); Serial.println(baseline);
+  }
   delay(5);
 }
