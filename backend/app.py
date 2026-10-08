@@ -1,9 +1,12 @@
 """ReVoice backend: serves the page, stores profiles and recordings, and relays to Gemini and Colab."""
 
-from fastapi import FastAPI, UploadFile, Form, Request
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, UploadFile, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
+from pydantic import BaseModel
+import asyncio
 import requests
 import base64
 import json
@@ -16,6 +19,7 @@ from profiles import ProfileStore, ProfileError, ProfileNotFound, MAX_UPLOAD_BYT
 from guided_sentences import GUIDED_SENTENCES, SESSION_SIZE
 from dataset_export import build_dataset_zip
 from generation_log import log_generation, summarize
+from switch_bridge import SwitchBridge, SwitchHub, VALID_STATES
 
 # Settings come from backend/.env (kept out of git); real environment variables win.
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -27,7 +31,32 @@ COLAB_API_URL = os.environ.get("COLAB_API_URL", "https://handcart-retrieval-mulc
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-app = FastAPI()
+# Single switch (Arduino + EMG sensor) on a serial port, e.g. COM3. Empty = no hardware (spacebar only).
+SWITCH_SERIAL_PORT = os.environ.get("SWITCH_SERIAL_PORT", "").strip()
+try:
+    SWITCH_BAUD = int(os.environ.get("SWITCH_BAUD", "9600"))
+except ValueError:
+    SWITCH_BAUD = 9600
+
+# ONE reader for the whole server (a COM port can only be opened once); the hub copies
+# each event to every open /ws/switch connection.
+switch = SwitchBridge(SWITCH_SERIAL_PORT, SWITCH_BAUD)
+switch_hub = SwitchHub()
+switch.listeners.append(lambda event: switch_hub.publish(event))
+
+
+@asynccontextmanager
+async def lifespan(app):
+    """Starts the switch reader with the server and stops it on shutdown (frees the COM port)."""
+    if switch.enabled:
+        switch.start()
+    else:
+        print("[switch] SWITCH_SERIAL_PORT not set: scanning works with the spacebar only")
+    yield
+    switch.stop()
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 def call_colab(method: str, path: str, **kwargs):
@@ -46,7 +75,7 @@ def call_colab(method: str, path: str, **kwargs):
 
 # Page files are sent with no-cache so the browser never runs a stale app.js.
 API_PATHS = ("/predict", "/speak", "/upload_voice_clip", "/voice_bank",
-             "/profiles", "/stock_speakers", "/guided", "/stats", "/uploads")
+             "/profiles", "/stock_speakers", "/guided", "/stats", "/uploads", "/switch", "/ws")
 
 
 @app.middleware("http")
@@ -449,6 +478,50 @@ async def preview_references(emotion: str = "neutral", profile_id: str = "", eng
 async def stats_summary():
     """Generation time per engine and selections saved, from the log."""
     return summarize(GENERATION_LOG)
+
+
+# Single switch for scanning mode.
+@app.websocket("/ws/switch")
+async def switch_socket(ws: WebSocket):
+    """Sends {"state": "DOWN"|"UP", "t": time} to this page for every switch event."""
+    queue = switch_hub.subscribe()        # before accept(), so no event right after connecting is lost
+    sender = None
+
+    async def send_events():
+        while True:
+            await ws.send_json(await queue.get())
+
+    try:
+        await ws.accept()
+        sender = asyncio.create_task(send_events())
+        while True:                       # the page sends nothing; this just notices when it closes
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if sender:
+            sender.cancel()
+        switch_hub.unsubscribe(queue)
+
+
+@app.get("/switch/status")
+async def switch_status():
+    """enabled, connected, port, last_event... for the "Switch: connected" pill."""
+    return {**switch.status(), "clients": switch_hub.client_count()}
+
+
+class SimulatedSwitch(BaseModel):
+    state: str
+
+
+@app.post("/switch/simulate")
+async def switch_simulate(body: SimulatedSwitch):
+    """A fake switch event (tests and demos without hardware); debounced like the real one."""
+    state = body.state.strip().upper()
+    if state not in VALID_STATES:
+        return JSONResponse({"error": "state must be DOWN or UP"}, status_code=400)
+    event = switch.handle_state(state)
+    return {"accepted": event is not None, "event": event}
 
 
 # Mounted last so it doesn't shadow the API routes.

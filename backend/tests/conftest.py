@@ -32,3 +32,16 @@ def store(monkeypatch, tmp_path):
     # the generation log goes in the temporary folder too
     monkeypatch.setattr(backend, "GENERATION_LOG", str(tmp_path / "data" / "generation_log.csv"))
     return fresh
+
+
+@pytest.fixture(autouse=True)
+def switch(monkeypatch):
+    """Every test gets a fresh switch with NO serial port (a real COM port is never opened)
+    and a fresh hub, so debounce times and websocket clients don't leak between tests."""
+    from switch_bridge import SwitchBridge, SwitchHub
+    fresh = SwitchBridge("")
+    hub = SwitchHub()
+    fresh.listeners.append(hub.publish)
+    monkeypatch.setattr(backend, "switch", fresh)
+    monkeypatch.setattr(backend, "switch_hub", hub)
+    return fresh
