@@ -7,10 +7,12 @@ GenAI predicts the phrase, and it is spoken in the patient's own cloned voice.
 
 ```
 revoice/
-├── frontend/       the webpage (webcam, letter grid, predictions, voice recorder)
+├── frontend/       the webpage (webcam, letter grid, scanning keyboard, predictions, voice recorder)
 ├── backend/        the Python server connecting frontend <-> Colab and Gemini
 │   ├── data/       users and their recordings (created automatically, not in git)
 │   └── tests/      automated tests (Colab and Gemini are faked)
+├── hardware/
+│   └── switch_emg.ino   Arduino sketch: EMG muscle sensor -> single switch ("DOWN"/"UP")
 └── colab/
     ├── revoice_server_v2.ipynb   the voice server (XTTS-v2 + F5-TTS) — the ONLY one to use
     └── archive/                  old notebooks — do NOT run these
@@ -46,6 +48,12 @@ GEMINI_API_KEY=your-key-from-aistudio.google.com
 ```
 `.env` is ignored by git, so keys never get committed. Without a Gemini key, predictions
 still work from an offline word list.
+
+Optional, for a hardware switch (see "Single switch" below):
+```
+SWITCH_SERIAL_PORT=COM3
+SWITCH_BAUD=9600
+```
 
 ### 3. Install and run the backend (always Python 3.10)
 ```powershell
@@ -103,6 +111,57 @@ node --test "frontend/tests/*.test.mjs"
    reference). Typed characters aren't pointer selections, so a typed sentence shows its
    pointer selections but no "saved by prediction" percentage, and the log marks it
    `keyboard`/`mixed` so it never counts in the savings summary.
+8. **Scanning (single switch)**, for someone who can't point: set **Input** to
+   *Scanning (single switch)* — see the next section.
+
+## Single switch: scanning mode
+
+For a patient with **no pointing ability**: one switch is enough. The switch is a muscle
+(EMG) sensor read by an Arduino, or the **spacebar** for testing.
+
+**How it works.** Rows light up one at a time (bright yellow). Press the switch when the
+row you want is lit; then the letters in that row light up one at a time — press again on
+the letter. If you don't press during one pass of the letters, the rows start again, so a
+wrong row is never a trap. After each selection there is a short "Get ready…" pause.
+
+- **Row 1** = the 3 AI predictions (fastest way to a whole sentence).
+- **Letters** are ordered by how common they are in English (E T A O I N S first), so
+  common letters need less waiting.
+- **Last row**: SPACE, ← DELETE, SPEAK, CLEAR. SPEAK uses the selected engine and emotion,
+  and scanning pauses until the audio has finished playing.
+- **Pause** button for the caregiver. **Scanning settings**: time per step (0.4–2.5 s,
+  default 1.0 s), pause after each selection (default 1.5 s), optional soft click on each
+  step. Saved in this browser.
+- Selections are counted exactly like pointer selections (one per letter/prediction), so
+  the "saved by prediction" figure works for scanning too.
+- The pill at the top says **Switch: connected on COM3**, **not connected (COM3) — using
+  spacebar** (hover it to see why), or **using spacebar** (no port set).
+
+**Wiring the Arduino (EMG sensor board):**
+
+| Sensor pin | Arduino Uno |
+|---|---|
+| SIG | A0 |
+| VCC | 5V |
+| GND | GND |
+
+1. Open `hardware/switch_emg.ino` in the Arduino IDE, upload it to the Uno. Keep the
+   muscle relaxed for ~2 s after it resets (it measures the resting level).
+2. Optional check: Arduino IDE → Serial Monitor at 9600 baud — tensing the muscle prints
+   `DOWN`, relaxing prints `UP`. **Then close the Serial Monitor** — only one program can
+   use the COM port, and the backend needs it.
+3. Find the port (Arduino IDE → Tools → Port, or Device Manager → Ports), e.g. `COM3`, and
+   put `SWITCH_SERIAL_PORT=COM3` in `backend/.env`.
+4. Start the backend. It prints `[switch] connected on COM3`. If the port is missing or
+   busy it prints a warning and keeps trying every 3 s — plugging the Arduino in later is
+   fine; the website keeps working with the spacebar meanwhile.
+
+**Without hardware:** leave `SWITCH_SERIAL_PORT` empty and press **Space** (not while
+typing in the text box). For a demo you can also fake a switch press from another
+terminal:
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/switch/simulate -ContentType application/json -Body '{"state":"DOWN"}'
+```
 
 ## Look and feel
 
@@ -207,6 +266,8 @@ plus what the website sends for that real user right now.
   Fine for a prototype; a real product would encrypt them.
 - **Laser detection needs decent lighting and a bright red dot** — red clothing or very
   bright rooms can confuse simple colour thresholding.
+- **The EMG switch threshold is fixed in the sketch** (`THRESHOLD = 60`). A weak or very
+  strong muscle signal may need that number changed and the sketch uploaded again.
 - **Colab free tier disconnects** after inactivity; re-run Steps 3, 3b, 3c, 4a, 5 and 6.
 - **F5-TTS uses one reference clip** (the longest, trimmed to 12 s or less at a pause) plus a
   Whisper transcript of it, shown under the F5 player. If the transcript is wrong, F5's
