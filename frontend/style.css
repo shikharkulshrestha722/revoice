@@ -34,6 +34,13 @@
   --canvas-flash: rgba(255, 255, 255, 0.85);   /* "selected!" flash */
   --canvas-muted-text: rgba(22, 33, 46, 0.55);
 
+  /* scanning keyboard: the lit row/cell must be impossible to miss (yellow + dark text) */
+  --scan-active-bg: #FFD400;
+  --scan-active-text: #16212E;
+  --scan-active-border: #16212E;
+  --scan-chosen-bg: #FFF4BF;        /* the picked row, dimly marked while its cells scan */
+  --scan-chosen-border: #A15C07;
+
   /* type */
   --font-ui: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-read: "Atkinson Hyperlegible", var(--font-ui);   /* very legible: sentence, letters */
@@ -89,6 +96,12 @@
   --canvas-pointer: #5CC2B4;
   --canvas-flash: rgba(92, 194, 180, 0.60);
   --canvas-muted-text: rgba(225, 231, 236, 0.55);
+
+  --scan-active-bg: #FFD84D;
+  --scan-active-text: #0D1318;
+  --scan-active-border: #FFF3C4;
+  --scan-chosen-bg: #3A3214;
+  --scan-chosen-border: #E3AC5F;
   color-scheme: dark;          /* native controls (audio, scrollbars, dropdowns) go dark too */
 }
 
@@ -126,6 +139,12 @@
     --canvas-pointer: #5CC2B4;
     --canvas-flash: rgba(92, 194, 180, 0.60);
     --canvas-muted-text: rgba(225, 231, 236, 0.55);
+
+    --scan-active-bg: #FFD84D;
+    --scan-active-text: #0D1318;
+    --scan-active-border: #FFF3C4;
+    --scan-chosen-bg: #3A3214;
+    --scan-chosen-border: #E3AC5F;
     color-scheme: dark;          /* native controls (audio, scrollbars, dropdowns) go dark too */
   }
 }
@@ -288,6 +307,85 @@ textarea.composed-box:focus-visible { outline: 3px solid var(--accent); outline-
   width: 100%;
   height: 100%;
 }
+
+/* scanning keyboard (single switch): rows light up, then the cells of the picked row */
+.scan-panel[hidden] { display: none; }
+.scan-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+.switch-pill {
+  display: inline-block;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: var(--space-1) var(--space-3);
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.switch-pill.ok { color: var(--success); background: var(--surface); border-color: var(--success); }
+.switch-pill.warn { color: var(--warning); background: var(--warning-soft); border-color: var(--warning-border); }
+.scan-state { font-weight: 600; color: var(--text); margin: 0; }
+
+.scan-grid { display: flex; flex-direction: column; gap: var(--space-2); }
+.scan-row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--space-2);
+  padding: var(--space-1);
+  border: 3px solid transparent;
+  border-radius: var(--radius);
+}
+.scan-row.predictions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.scan-row.controls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.scan-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 64px;                /* big, like the pointer grid */
+  padding: var(--space-2);
+  font-family: var(--font-read);
+  font-size: clamp(22px, 3vw, 32px);
+  font-weight: 700;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 4px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+.scan-row.predictions .scan-cell,
+.scan-row.controls .scan-cell { font-size: clamp(16px, 1.8vw, 22px); }
+.scan-cell.empty { color: var(--text-muted); font-weight: 400; }
+
+/* row scan: the whole lit row */
+.scan-row.is-active { border-color: var(--scan-active-border); background: var(--scan-active-bg); }
+.scan-row.is-active .scan-cell:not(.empty) {
+  background: var(--scan-active-bg);
+  color: var(--scan-active-text);
+  border-color: var(--scan-active-border);
+}
+/* column scan: the picked row stays dimly marked, the lit cell is bold yellow */
+.scan-row.is-chosen { border-color: var(--scan-chosen-border); border-style: dashed; background: var(--scan-chosen-bg); }
+.scan-cell.is-active {
+  background: var(--scan-active-bg);
+  color: var(--scan-active-text);
+  border-color: var(--scan-active-border);
+  box-shadow: 0 0 0 4px var(--scan-active-bg);
+}
+/* just selected: shown during the start delay */
+.scan-cell.is-picked { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.scan-grid.paused { opacity: 0.6; }
+
+.scan-settings { margin-top: var(--space-3); }
+.scan-settings summary { cursor: pointer; font-weight: 600; min-height: var(--target); display: flex; align-items: center; }
+.scan-settings label { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-2) 0; }
+.scan-settings input[type="range"] { width: min(260px, 100%); accent-color: var(--accent); }
+.scan-settings output { font-variant-numeric: tabular-nums; min-width: 5ch; }
 
 /* buttons, inputs */
 button {

@@ -6,6 +6,8 @@ import { selectionSavings } from "./selection_stats.js";
 import { emptySentence, pointerKey, choosePrediction, typed, textBoxKeyAction, isTypingTarget,
          inputMethod } from "./compose.js";
 import { metricsLines, moreSimilarEngine, referenceLines } from "./metrics_format.js";
+import { Scanner, buildScanRows, applyScanSelection, normalizeScanSettings, SCAN_LIMITS,
+         parseSwitchMessage, switchPillText } from "./scanning.js";
 import { mixToMono, convertForUpload, waveformPeaks, speechChunks, speechSecondsInRange,
          hasAllowedExtension } from "./audio_prep.js";
 
@@ -172,8 +174,9 @@ trackModeEl.onchange = () => {
   tracker.reset();
   dwell.reset();
   lastFingerPoint = null;
+  setScanningMode(trackModeEl.value === "scanning");
   if (trackModeEl.value === "finger") loadHandTracker();
-  else trackStatusEl.textContent = "Laser mode — aim a red laser dot at the grid.";
+  else if (trackModeEl.value === "laser") trackStatusEl.textContent = "Laser mode — aim a red laser dot at the grid.";
 };
 
 // Camera
@@ -237,7 +240,8 @@ refreshSuggestions();        // show starter phrases straight away
 
 // Main loop
 function loop() {
-  if (video.readyState >= 2) {
+  // scanning mode hides the camera: no tracking, so a hand in view can't type
+  if (video.readyState >= 2 && !scan.active) {
     const W = overlay.width, H = overlay.height;
     const now = performance.now();
 
@@ -480,6 +484,7 @@ function refreshSuggestions() {
       suggestions = data.suggestions || [];
       suggestionSource = data.source || "";
       renderPredictionButtons();
+      updateScanPredictions();
     } catch (err) {
       if (err.name !== "AbortError") console.error("prediction failed", err);
     }
@@ -592,6 +597,219 @@ document.getElementById("clearBtn").onclick = () => {
   utteranceId = crypto.randomUUID();      // new sentence: start counting again
   setSentence(emptySentence());
 };
+
+// Scanning (single switch): for a patient who can't point. The logic is in scanning.js;
+// a selection changes the sentence with the same compose.js functions as the pointer grid.
+const SCAN_SETTINGS_KEY = "revoice-scan-settings";
+const scanEl = (id) => document.getElementById(id);
+const scan = {
+  active: false,
+  userPaused: false,      // the Pause button
+  speechPaused: false,    // automatic, from SPEAK until the audio has finished
+  timer: null,
+  settings: loadScanSettings(),
+  clickCtx: null,         // AudioContext for the optional click sound
+};
+const scanner = new Scanner({ stepMs: scan.settings.stepMs, startDelayMs: scan.settings.startDelayMs,
+                              rows: buildScanRows(suggestions) });
+
+function loadScanSettings() {
+  try { return normalizeScanSettings(JSON.parse(localStorage.getItem(SCAN_SETTINGS_KEY))); }
+  catch { return normalizeScanSettings(null); }       // storage blocked or bad JSON: defaults
+}
+
+function saveScanSettings() {
+  try { localStorage.setItem(SCAN_SETTINGS_KEY, JSON.stringify(scan.settings)); }
+  catch { /* not saved, still works for this visit */ }
+}
+
+// The grid is built once; each step only changes classes.
+function buildScanGrid() {
+  scanEl("scanGrid").replaceChildren(...scanner.rows.map((row, r) => {
+    const rowEl = document.createElement("div");
+    rowEl.className = "scan-row";
+    if (r === 0) rowEl.classList.add("predictions");
+    if (r === scanner.rows.length - 1) rowEl.classList.add("controls");
+    rowEl.append(...row.map(() => {
+      const cellEl = document.createElement("div");
+      cellEl.className = "scan-cell";
+      return cellEl;
+    }));
+    return rowEl;
+  }));
+  renderScan();
+}
+
+function renderScan() {
+  const view = scanner.view();
+  const rowEls = scanEl("scanGrid").children;
+  scanner.rows.forEach((row, r) => {
+    const rowEl = rowEls[r];
+    if (!rowEl) return;
+    rowEl.classList.toggle("is-active", view.phase === "rows" && view.row === r);
+    rowEl.classList.toggle("is-chosen", view.phase === "cols" && view.row === r);
+    row.forEach((cell, c) => {
+      const cellEl = rowEl.children[c];
+      cellEl.textContent = cell.label || "…";               // empty prediction: "..."
+      cellEl.classList.toggle("empty", !cell.label);
+      cellEl.classList.toggle("is-active", view.phase === "cols" && view.row === r && view.col === c);
+      cellEl.classList.toggle("is-picked", Boolean(view.picked && view.picked.row === r && view.picked.col === c));
+    });
+  });
+  scanEl("scanGrid").classList.toggle("paused", view.paused);
+  scanEl("scanState").textContent =
+    view.paused ? (scan.speechPaused && !scan.userPaused ? "Paused while speaking…" : "Paused")
+    : view.phase === "waiting" ? "Get ready…"
+    : view.phase === "rows" ? "Press on the row you want"
+    : view.phase === "cols" ? "Press on the letter you want" : "";
+}
+
+// new predictions: same rows, new phrases in row 0
+function updateScanPredictions() {
+  scanner.setRows(buildScanRows(suggestions));
+  if (scan.active) renderScan();
+}
+
+function setScanningMode(on) {
+  scan.active = on;
+  scanEl("scanPanel").hidden = !on;
+  scanEl("cameraWrap").hidden = on;
+  scanEl("startCamBtn").hidden = on;
+  scanEl("inputHint").textContent = on
+    ? "Press the switch (or Space) when your row lights up, then again on the letter. " +
+      "If you miss, the rows start again."
+    : "Hold the pointer still on a letter until the ring fills up.";
+  clearInterval(scan.timer);
+  if (!on) { scanner.stop(); return; }
+  trackStatusEl.textContent = "Scanning mode — no camera needed.";
+  updateScanPredictions();
+  buildScanGrid();
+  scanner.setPaused(scan.userPaused || scan.speechPaused, performance.now());
+  scanner.start(performance.now());
+  renderScan();
+  scan.timer = setInterval(scanTick, 50);     // checks often; scanner decides when a step is due
+}
+
+function scanTick() {
+  if (!scanner.tick(performance.now())) return;
+  const phase = scanner.view().phase;
+  if (phase === "rows" || phase === "cols") playScanClick();
+  renderScan();
+}
+
+// Every input (switch, spacebar) ends up here.
+function handleSelect() {
+  if (!scan.active) return;
+  const result = scanner.press(performance.now());
+  if (result?.type === "cell") runScanCell(result.cell);
+  renderScan();
+}
+
+function runScanCell(cell) {
+  const { sentence: next, command } = applyScanSelection(sentence, cell);
+  if (command === "speak") scanSpeak();
+  else if (command === "clear") document.getElementById("clearBtn").click();   // same as the Clear button
+  else setSentence(next);
+}
+
+function applyScanPause() {
+  scanner.setPaused(scan.userPaused || scan.speechPaused, performance.now());
+  const btn = scanEl("scanPauseBtn");
+  btn.textContent = scan.userPaused ? "Resume" : "Pause";
+  btn.setAttribute("aria-pressed", String(scan.userPaused));
+  renderScan();
+}
+
+// SPEAK: same speak() as the Speak button; scanning waits until the audio has finished playing.
+async function scanSpeak() {
+  scan.speechPaused = true;
+  applyScanPause();
+  try {
+    await speak(sentence.text, document.getElementById("emotion").value, true);
+    await playbackFinished(document.getElementById("outputAudio"));
+  } finally {
+    scan.speechPaused = false;
+    applyScanPause();
+  }
+}
+
+// resolves when the audio ends, is stopped, or fails (at once if it isn't playing, e.g. Compare both)
+function playbackFinished(audio) {
+  if (audio.hidden || audio.paused || audio.ended) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      for (const type of ["ended", "pause", "error"]) audio.removeEventListener(type, done);
+      resolve();
+    };
+    for (const type of ["ended", "pause", "error"]) audio.addEventListener(type, done);
+  });
+}
+
+// optional soft tick on each step (helps users who can't watch the screen all the time)
+function playScanClick() {
+  if (!scan.settings.clickSound) return;
+  try {
+    scan.clickCtx ??= new AudioContext();
+    const ac = scan.clickCtx;
+    if (ac.state === "suspended") ac.resume();
+    const osc = ac.createOscillator(), gain = ac.createGain();
+    osc.frequency.value = 660;
+    gain.gain.setValueAtTime(0.06, ac.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.05);
+    osc.connect(gain).connect(ac.destination);
+    osc.start();
+    osc.stop(ac.currentTime + 0.06);
+  } catch { /* no audio: scanning still works */ }
+}
+
+scanEl("scanPauseBtn").onclick = () => {
+  scan.userPaused = !scan.userPaused;
+  applyScanPause();
+};
+
+// settings panel (caregiver)
+function showScanSettings() {
+  const { stepMs, startDelayMs, clickSound } = scan.settings;
+  scanEl("scanSpeed").value = stepMs;
+  scanEl("scanSpeedOut").textContent = `${(stepMs / 1000).toFixed(1)} s`;
+  scanEl("scanDelay").value = startDelayMs;
+  scanEl("scanDelayOut").textContent = `${(startDelayMs / 1000).toFixed(1)} s`;
+  scanEl("scanClick").checked = clickSound;
+}
+
+function changeScanSettings(changes) {
+  scan.settings = normalizeScanSettings({ ...scan.settings, ...changes });
+  scanner.stepMs = scan.settings.stepMs;
+  scanner.startDelayMs = scan.settings.startDelayMs;
+  saveScanSettings();
+  showScanSettings();
+}
+
+for (const [id, key] of [["scanSpeed", "stepMs"], ["scanDelay", "startDelayMs"]]) {
+  scanEl(id).min = SCAN_LIMITS[key].min;
+  scanEl(id).max = SCAN_LIMITS[key].max;
+  scanEl(id).oninput = () => changeScanSettings({ [key]: Number(scanEl(id).value) });
+}
+scanEl("scanClick").onchange = () => {
+  changeScanSettings({ clickSound: scanEl("scanClick").checked });
+  if (scan.settings.clickSound) playScanClick();       // a click here also unlocks browser audio
+};
+showScanSettings();
+
+// Spacebar = the switch (testing without hardware). Not while typing, and not while guided
+// banking is open (Space records there).
+function spaceIsForScanning(e) {
+  return scan.active && e.code === "Space" && !isTypingTarget(e.target) &&
+         document.getElementById("guidedPanel").hidden;
+}
+document.addEventListener("keydown", (e) => {
+  if (!spaceIsForScanning(e)) return;
+  e.preventDefault();                     // no page scroll, no "click" on a focused button
+  if (!e.repeat) handleSelect();          // holding Space down is ONE press
+});
+document.addEventListener("keyup", (e) => {
+  if (spaceIsForScanning(e)) e.preventDefault();
+});
 
 // User profiles (caregiver controls, so mouse-only is fine)
 let profiles = [];
@@ -1741,3 +1959,4 @@ function showSavedUploads(data) {
 // Start: runs last, so everything above is defined.
 loadProfiles();
 updateSelectionStats();
+setScanningMode(trackModeEl.value === "scanning");   // the browser may restore the last mode on reload

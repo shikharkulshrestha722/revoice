@@ -97,20 +97,44 @@
     <!-- LEFT: camera + letter grid -->
     <section class="panel card camera-panel">
       <h2>Point &amp; select</h2>
-      <div class="camera-wrap">
+      <div id="cameraWrap" class="camera-wrap">
         <video id="webcam" autoplay muted playsinline></video>
         <canvas id="overlay"></canvas>
       </div>
+
+      <!-- SCANNING (single switch): for a patient who can't point. Rows light up one at a
+           time; press the switch (or Space) on the row, then again on the letter. -->
+      <div id="scanPanel" class="scan-panel" hidden>
+        <div class="scan-topbar">
+          <span id="switchPill" class="switch-pill" role="status">Switch: using spacebar</span>
+          <button id="scanPauseBtn" type="button" aria-pressed="false">Pause</button>
+          <p id="scanState" class="scan-state" aria-live="polite"></p>
+        </div>
+        <div id="scanGrid" class="scan-grid" aria-label="Scanning keyboard"></div>
+        <!-- caregiver settings, saved in this browser -->
+        <details class="scan-settings">
+          <summary>Scanning settings</summary>
+          <label for="scanSpeed">Scan speed (time per step):
+            <input type="range" id="scanSpeed" min="400" max="2500" step="100" />
+            <output id="scanSpeedOut" for="scanSpeed"></output></label>
+          <label for="scanDelay">Pause after each selection:
+            <input type="range" id="scanDelay" min="0" max="5000" step="100" />
+            <output id="scanDelayOut" for="scanDelay"></output></label>
+          <label><input type="checkbox" id="scanClick" /> Soft click sound on each step</label>
+        </details>
+      </div>
+
       <div class="controls-row">
         <button id="startCamBtn" class="primary">Start Camera</button>
-        <label for="trackMode">Tracking:</label>
+        <label for="trackMode">Input:</label>
         <select id="trackMode">
           <option value="finger">Finger (index fingertip)</option>
           <option value="laser">Laser pointer (red dot)</option>
+          <option value="scanning">Scanning (single switch)</option>
         </select>
       </div>
       <p id="trackStatus" class="hint">Click Start Camera to begin.</p>
-      <p class="hint">Hold the pointer still on a letter until the ring fills up.</p>
+      <p id="inputHint" class="hint">Hold the pointer still on a letter until the ring fills up.</p>
     </section>
 
     <!-- RIGHT: voice controls -->
