@@ -130,6 +130,12 @@ backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select
                          busy/unplugged -> warn once, retry 3 s. SwitchHub -> every /ws/switch
                          client via call_soon_threadsafe. GET /switch/status, POST
                          /switch/simulate {"state"} (debounced too). Tests use a fake port.
+            tools/       twitch_to_space.py (EMG DOWN -> pyautogui Space, 0.4 s lockout, --fake),
+                         emg_calibrate.py (raw-stream sketch, replays switch_emg.ino maths,
+                         writes THRESHOLD only if the replay is perfect), serial_tools.py
+                         (port detect, busy/missing messages, arduino-cli at C:\Program Files                         Arduino CLI; sketch staged into <name>/<name>.ino). Option A
+                         (twitch_to_space, SWITCH_SERIAL_PORT empty) XOR option B (bridge).
+                         conftest refuses real serial.Serial. /speak input_method also "scanning".
             predictor.py Gemini prompt, reply parsing, offline fallback, is_sensible()
             tests/       pytest; Colab + Gemini always mocked, real network calls fail;
                          each test gets a temporary data folder (never touches backend/data)

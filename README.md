@@ -49,7 +49,8 @@ GEMINI_API_KEY=your-key-from-aistudio.google.com
 `.env` is ignored by git, so keys never get committed. Without a Gemini key, predictions
 still work from an offline word list.
 
-Optional, for a hardware switch (see "Single switch" below):
+Optional, only for the switch's **Option B** (see "Finger-twitch switch" below; leave it
+empty for Option A):
 ```
 SWITCH_SERIAL_PORT=COM3
 SWITCH_BAUD=9600
@@ -137,7 +138,12 @@ wrong row is never a trap. After each selection there is a short "Get ready…" 
 - The pill at the top says **Switch: connected on COM3**, **not connected (COM3) — using
   spacebar** (hover it to see why), or **using spacebar** (no port set).
 
-**Wiring the Arduino (EMG sensor board):**
+## Finger-twitch switch (Arduino + EMG sensor)
+
+A small finger twitch is picked up by an EMG (muscle) sensor on the forearm. The Arduino
+turns it into a `DOWN` line (and `UP` when the muscle relaxes) over USB.
+
+**Wiring (sensor board → Arduino Uno):**
 
 | Sensor pin | Arduino Uno |
 |---|---|
@@ -145,20 +151,46 @@ wrong row is never a trap. After each selection there is a short "Get ready…" 
 | VCC | 5V |
 | GND | GND |
 
-1. Open `hardware/switch_emg.ino` in the Arduino IDE, upload it to the Uno. Keep the
-   muscle relaxed for ~2 s after it resets (it measures the resting level).
-2. Optional check: Arduino IDE → Serial Monitor at 9600 baud — tensing the muscle prints
-   `DOWN`, relaxing prints `UP`. **Then close the Serial Monitor** — only one program can
-   use the COM port, and the backend needs it.
-3. Find the port (Arduino IDE → Tools → Port, or Device Manager → Ports), e.g. `COM3`, and
-   put `SWITCH_SERIAL_PORT=COM3` in `backend/.env`.
-4. Start the backend. It prints `[switch] connected on COM3`. If the port is missing or
-   busy it prints a warning and keeps trying every 3 s — plugging the Arduino in later is
-   fine; the website keeps working with the spacebar meanwhile.
+**Pad placement (forearm, for a finger twitch):** palm side of the forearm, about a third of
+the way from the elbow to the wrist (the finger-bending muscle — you feel it move when you
+wiggle your fingers). Put the two **signal pads** (often marked MID and END) on that muscle,
+2–3 cm apart, **in a line along the forearm**. Put the **reference pad** (REF) on bone with no
+muscle under it: the bony point of the elbow, or the knob on the back of the wrist. Clean,
+dry skin; press the pads on firmly; keep the cables from swinging.
 
-**Without hardware:** leave `SWITCH_SERIAL_PORT` empty and press **Space** (not while
-typing in the text box). For a demo you can also fake a switch press from another
-terminal:
+**Tools** (Python 3.10, from the `backend` folder; arduino-cli: `winget install ArduinoSA.CLI`,
+then `arduino-cli core install arduino:avr`):
+
+| Tool | What it does |
+|---|---|
+| `py -3.10 tools/emg_calibrate.py` | Uploads a temporary sketch, asks you to relax 5 s and twitch 5 times, sets `THRESHOLD` in `hardware/switch_emg.ino` halfway between your resting noise and your weakest twitch, uploads it, then checks 20 s live. Stops without changing anything if rest and twitches overlap (pads/wiring). `--dry-run` measures only. |
+| `py -3.10 tools/twitch_to_space.py` | Every twitch presses **Space** (lockout 0.4 s against double triggers). Finds the Arduino port by itself (`--port COM3` to choose). `--fake`: no Arduino, Enter = a twitch. |
+
+`hardware/switch_emg.ino` has two settings at the top: `THRESHOLD` (written by the
+calibration) and `DEBUG` (`true` also prints raw/envelope/baseline numbers for the Arduino
+IDE Serial Plotter; the tools ignore those lines). The Arduino IDE wants the sketch in a
+folder of the same name — let it create one, or use the tools (they handle it).
+
+### Two ways to connect it — use ONE at a time
+
+Only one program can open a COM port. Close the Arduino Serial Monitor before either.
+
+**Option A (simplest): twitch → Space key**
+1. In `backend/.env`, leave `SWITCH_SERIAL_PORT=` **empty**.
+2. Start the backend, open http://localhost:8000, set **Input** to *Scanning (single switch)*.
+3. In a second terminal: `cd backend; py -3.10 tools/twitch_to_space.py`
+4. Click the ReVoice browser tab so it is **focused** (Space goes to the window in front).
+   The pill says "Switch: using spacebar" — correct, the twitches arrive as Space.
+
+**Option B: backend serial bridge**
+1. In `backend/.env`: `SWITCH_SERIAL_PORT=COM3` (your port) and `SWITCH_BAUD=9600`.
+2. Do **not** run `twitch_to_space.py`.
+3. Start the backend; it prints `[switch] connected on COM3`. Set Input to Scanning; the
+   pill says **Switch: connected on COM3**. The tab doesn't need focus. If the port is
+   missing or busy the backend warns and retries every 3 s.
+
+**Fallback:** the **spacebar always works** in scanning mode (not while typing in the text
+box). Without hardware you can also fake a switch press (Option B's path):
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://localhost:8000/switch/simulate -ContentType application/json -Body '{"state":"DOWN"}'
 ```
@@ -266,8 +298,9 @@ plus what the website sends for that real user right now.
   Fine for a prototype; a real product would encrypt them.
 - **Laser detection needs decent lighting and a bright red dot** — red clothing or very
   bright rooms can confuse simple colour thresholding.
-- **The EMG switch threshold is fixed in the sketch** (`THRESHOLD = 60`). A weak or very
-  strong muscle signal may need that number changed and the sketch uploaded again.
+- **The EMG threshold is per person and per pad placement.** Re-run
+  `tools/emg_calibrate.py` whenever the pads are moved; sweat or loose pads cause false
+  triggers or missed twitches.
 - **Colab free tier disconnects** after inactivity; re-run Steps 3, 3b, 3c, 4a, 5 and 6.
 - **F5-TTS uses one reference clip** (the longest, trimmed to 12 s or less at a pause) plus a
   Whisper transcript of it, shown under the F5 player. If the transcript is wrong, F5's
