@@ -330,7 +330,7 @@ async def export_dataset(profile_id: str):
     )
 
 
-INPUT_METHODS = ("pointer", "keyboard", "mixed")
+INPUT_METHODS = ("pointer", "keyboard", "mixed", "scanning")     # only logged; speech is the same
 
 # Engines the Colab notebook understands.
 SUPPORTED_ENGINES = ("xtts", "f5")

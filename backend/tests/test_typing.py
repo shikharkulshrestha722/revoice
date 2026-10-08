@@ -76,3 +76,22 @@ def test_typed_sentences_are_logged_but_never_count_as_savings(user, colab):
 def test_unknown_input_method_is_not_logged(user, colab):
     client.post("/speak", data={"text": "HI", "emotion": "happy", "input_method": "<script>"})
     assert log_rows()[-1]["input_method"] == ""
+
+
+def test_scanning_is_logged_and_counts_as_savings(user, colab):
+    client.post("/speak", data={"text": "I NEED WATER ", "emotion": "happy", "selections": "4",
+                                "utterance_id": "pointed", "input_method": "pointer"})
+    pointed_request = dict(colab)
+    client.post("/speak", data={"text": "I NEED WATER ", "emotion": "happy", "selections": "3",
+                                "utterance_id": "scanned", "input_method": "scanning"})
+    assert colab == pointed_request                                   # spoken exactly the same way
+    row = log_rows()[-1]
+    assert row["input_method"] == "scanning" and row["selections"] == "3"
+    assert summarize(backend.GENERATION_LOG)["selections"]["sentences"] == 2
+
+
+def test_missing_input_method_is_logged_blank_as_before(user, colab):
+    r = client.post("/speak", data={"text": "HI", "emotion": "happy", "selections": "2", "utterance_id": "x"})
+    assert r.status_code == 200
+    row = log_rows()[-1]
+    assert row["input_method"] == "" and row["selections"] == "2" and row["success"] == "yes"

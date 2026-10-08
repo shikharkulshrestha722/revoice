@@ -1287,7 +1287,7 @@ async function requestSpeech(engine, text, emotion, counted = true) {
   if (counted) {
     if (!sentence.typed) formData.append("selections", sentence.selections);    // for the generation log
     formData.append("utterance_id", utteranceId);
-    formData.append("input_method", inputMethod(sentence));
+    formData.append("input_method", inputMethod(sentence, scan.active));   // "scanning" in scanning mode
   }
 
   const start = performance.now();

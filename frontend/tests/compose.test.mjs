@@ -92,3 +92,11 @@ test("page shortcuts (Space = record in guided banking) don't fire while typing"
   assert.equal(isTypingTarget({}), false);                        // e.g. the document itself
 });
 
+
+test("scanning mode is logged as scanning; typing still wins", () => {
+  let s = pointerKey(emptySentence(), "H");
+  assert.equal(inputMethod(s, true), "scanning");
+  assert.equal(inputMethod(s, false), "pointer");
+  assert.equal(inputMethod(typed(s, "HI"), true), "mixed");
+  assert.equal(inputMethod(typed(emptySentence(), "HI"), true), "keyboard");
+});

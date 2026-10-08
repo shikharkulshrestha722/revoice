@@ -38,8 +38,8 @@ export function isTypingTarget(target) {
                  target.matches("input, select, textarea, [contenteditable]:not([contenteditable='false'])"));
 }
 
-// pointer, keyboard or mixed, for the generation log
-export function inputMethod(state) {
-  if (!state.typed) return "pointer";
+// pointer, scanning (single switch), keyboard or mixed, for the generation log
+export function inputMethod(state, scanning = false) {
+  if (!state.typed) return scanning ? "scanning" : "pointer";
   return state.selections > 0 ? "mixed" : "keyboard";
 }
