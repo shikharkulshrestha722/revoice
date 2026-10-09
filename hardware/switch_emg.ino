@@ -3,7 +3,7 @@
 // Read by backend/tools/twitch_to_space.py (Space key) OR backend/switch_bridge.py (SWITCH_SERIAL_PORT).
 
 // ===================== SETTINGS (backend/tools/emg_calibrate.py rewrites these) =====================
-const int THRESHOLD = 60;     // how far the muscle signal must rise above rest to count as a twitch
+const int THRESHOLD = 144;    // how far the muscle signal must rise above rest to count as a twitch
 const bool DEBUG = false;     // true: also print "raw,envelope,baseline" for the Serial Plotter
                               // (the ReVoice tools ignore those lines; only DOWN/UP matter)
 // ====================================================================================================
