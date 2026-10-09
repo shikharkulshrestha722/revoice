@@ -163,7 +163,7 @@ then `arduino-cli core install arduino:avr`):
 
 | Tool | What it does |
 |---|---|
-| `py -3.10 tools/emg_calibrate.py` | Uploads a temporary sketch, asks you to relax 5 s and twitch 5 times, sets `THRESHOLD` in `hardware/switch_emg.ino` halfway between your resting noise and your weakest twitch, uploads it, then checks 20 s live. Stops without changing anything if rest and twitches overlap (pads/wiring). `--dry-run` measures only. |
+| `py -3.10 tools/emg_calibrate.py` | Uploads a temporary sketch, asks you to relax 5 s and twitch 5 times, sets `THRESHOLD` in `hardware/switch_emg.ino` halfway between your resting noise and your weakest twitch, uploads it, then checks 20 s live. Stops without changing anything if rest and twitches overlap (pads/wiring). `--dry-run` measures only; `--check-only` re-uploads the sketch as it is and runs just the 20 s check. The sketch fires one DOWN per twitch: UP only below `THRESHOLD/2` (hysteresis) and no new DOWN within 400 ms. |
 | `py -3.10 tools/twitch_to_space.py` | Every twitch presses **Space** (lockout 0.4 s against double triggers). Finds the Arduino port by itself (`--port COM3` to choose). `--fake`: no Arduino, Enter = a twitch. |
 
 `hardware/switch_emg.ino` has two settings at the top: `THRESHOLD` (written by the

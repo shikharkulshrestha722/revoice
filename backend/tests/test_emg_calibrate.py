@@ -50,6 +50,61 @@ def test_baseline_freezes_while_pressed_like_the_board():
     assert activation[-1] == pytest.approx(200, abs=10)
 
 
+def wobbly_twitch(at, length=500):
+    """A twitch that wobbles: three 25 ms bursts with 25 ms gaps (~125 ms), then rest."""
+    raw = [500] * length
+    for start in (at, at + 10, at + 20):
+        for i in range(start, start + 5):
+            raw[i] = 1000
+    return raw
+
+
+def upward_crossings(activation, threshold):
+    return sum(a <= threshold < b for a, b in zip(activation, activation[1:]))
+
+
+def test_hysteresis_one_wobbly_twitch_is_one_down():
+    raw = wobbly_twitch(300)
+    activation, events = cal.simulate_sketch(raw, 150)
+    assert upward_crossings(activation, 150) == 2        # without hysteresis: 2 DOWNs (chatter)
+    assert [s for _, s in events] == ["DOWN", "UP"]
+    up = events[1][0]
+    assert activation[up] < cal.release_level(150) <= activation[up - 1]  # UP only below RELEASE
+
+
+def test_refractory_blocks_a_second_down_within_400_ms():
+    hz = 200                                             # 5 ms per sample: 400 ms = 80 samples
+    raw = [500] * 300 + ([800] * 6 + [500] * 30) * 2 + [500] * 400   # 2 short twitches 180 ms apart
+    _, events = cal.simulate_sketch(raw, 60, hz=hz)
+    assert [s for _, s in events] == ["DOWN", "UP"]      # second one is inside the refractory time
+    raw = [500] * 300 + [800] * 6 + [500] * 120 + [800] * 6 + [500] * 400  # 630 ms apart
+    _, events = cal.simulate_sketch(raw, 60, hz=hz)
+    assert [s for _, s in events] == ["DOWN", "UP", "DOWN", "UP"]
+
+
+def test_release_is_whole_number_half_like_the_sketch():
+    assert cal.release_level(144) == 72 and cal.release_level(145) == 72
+    assert cal.release_level(60.0) == 30.0
+
+
+def test_sketch_has_the_same_anti_chatter_rules_as_the_replay():
+    with open(serial_tools.SWITCH_SKETCH, encoding="utf-8") as f:
+        text = f.read()
+    assert "const int RELEASE = THRESHOLD / 2;" in text
+    assert f"const unsigned long REFRACTORY_MS = {cal.REFRACTORY_MS};" in text
+    assert "level < RELEASE" in text and "level > THRESHOLD && rested" in text
+
+
+def test_a_prompt_with_two_twitches_is_flagged_and_not_written():
+    raw, rest, windows = recording([200] * 5, noise_sd=2)
+    a, _ = windows[2]
+    for i in range(a + 200, a + 260):                    # a second twitch 0.7 s after the first
+        raw[i] += 200
+    r = cal.analyze(raw, rest, windows, hz=HZ)
+    assert r["double_twitches"] == [3] and r["usable"] is False
+    assert any("more than one DOWN" in line for line in cal.describe(r))
+
+
 def test_good_recording_gives_a_threshold_between_noise_and_weakest_twitch():
     raw, rest, windows = recording([180, 150, 220, 160, 200])
     r = cal.analyze(raw, rest, windows)
@@ -59,7 +114,7 @@ def test_good_recording_gives_a_threshold_between_noise_and_weakest_twitch():
     assert r["weakest"] == min(r["peaks"]) and len(r["peaks"]) == 5
     assert r["peaks"].index(r["weakest"]) == 1          # the 150 burst
     assert r["false_downs_at_rest"] == 0
-    assert r["missed_twitches"] == []
+    assert r["missed_twitches"] == [] and r["double_twitches"] == []
     assert r["margin"] == pytest.approx(r["weakest"] - r["ceiling"])
     assert 495 < r["rest_mean"] < 505 and 2 < r["rest_noise_sd"] < 4
 
@@ -171,3 +226,14 @@ def test_dry_run_changes_nothing(fake_hardware, monkeypatch):
     monkeypatch.setattr(cal, "record", lambda port, rest_s, n: (*recording([200] * 5), 196.0))
     assert cal.main(["--port", "COM3", "--dry-run"]) == 0
     assert sketch.read_text(encoding="utf-8") == before and len(uploads) == 1
+
+
+def test_check_only_uploads_the_sketch_as_it_is_and_listens(fake_hardware, monkeypatch, capsys):
+    sketch, uploads = fake_hardware
+    before = sketch.read_text(encoding="utf-8")
+    monkeypatch.setattr(cal, "record", lambda *a: pytest.fail("recorded"))
+    assert cal.main(["--port", "COM5", "--check-only"]) == 0
+    assert sketch.read_text(encoding="utf-8") == before
+    assert uploads == [before]                          # only switch_emg.ino, unchanged
+    out = capsys.readouterr().out
+    assert "THRESHOLD = 144" in out and "Looks good" in out

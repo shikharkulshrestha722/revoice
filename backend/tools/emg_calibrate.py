@@ -3,13 +3,15 @@
     cd backend
     py -3.10 tools/emg_calibrate.py               # finds the Arduino port by itself
     py -3.10 tools/emg_calibrate.py --port COM3 --dry-run    # measure + suggest, change nothing
+    py -3.10 tools/emg_calibrate.py --port COM3 --check-only # upload switch_emg.ino as it is + 20 s check
 
 Steps:
  1. Uploads a temporary sketch that streams raw A0 values (~200 per second, the same loop
     timing as switch_emg.ino).
  2. "Relax 5 s", then "TWITCH NOW" 5 times.
  3. Replays switch_emg.ino's own maths (envelope, slowly-following baseline) on the recording,
-    so the numbers are in the sketch's units. THRESHOLD = halfway between the highest resting
+    so the numbers are in the sketch's units (with the RELEASE = THRESHOLD/2 hysteresis and the
+    400 ms refractory time, so one twitch = one DOWN). THRESHOLD = halfway between the highest resting
     value (noise ceiling) and the weakest twitch. Overlap = pads or wiring problem: stops.
  4. Writes THRESHOLD (and DEBUG = false) into hardware/switch_emg.ino and uploads it.
  5. Listens 20 s (10 s rest, 10 s twitching) and reports DOWN/UP counts and false DOWNs.
@@ -37,6 +39,8 @@ INIT_SAMPLES = 200            # setup() averages 200 readings for the first base
 STREAM_BAUD = 115200          # 200 numbers/s need more than 9600 baud
 SWITCH_BAUD = 9600
 MIN_SAMPLE_HZ = 150           # below this the replay no longer matches the sketch's timing
+REFRACTORY_MS = 400           # no new DOWN within 400 ms of the previous DOWN
+SAMPLE_HZ = 195               # loop speed (analogRead + delay(5)); record() measures the real one
 TIGHT_MARGIN = 20             # a margin smaller than this works, but only just
 
 # Temporary sketch: the same loop timing as switch_emg.ino (analogRead + delay(5)).
@@ -51,15 +55,26 @@ void loop() {
 
 # Maths (pure, tested with made-up recordings)
 
-def simulate_sketch(raw, threshold, init_samples=INIT_SAMPLES):
+def release_level(threshold):
+    """RELEASE = THRESHOLD / 2 in the sketch (whole-number division, as C++ does for ints)."""
+    return threshold // 2 if isinstance(threshold, int) else threshold / 2
+
+
+def simulate_sketch(raw, threshold, init_samples=INIT_SAMPLES, hz=SAMPLE_HZ):
     """Runs switch_emg.ino's loop on recorded values. Returns (activation per sample, events),
     activation = envelope - baseline (what the sketch compares with THRESHOLD),
-    events = [(sample index, "DOWN"|"UP")]. The baseline stops following while pressed, as on the board."""
+    events = [(sample index, "DOWN"|"UP")]. Same rules as the board:
+    - DOWN when level > THRESHOLD, but not within REFRACTORY_MS of the previous DOWN
+    - UP only when level < RELEASE (= THRESHOLD / 2), so a wobbly twitch gives one DOWN
+    - the baseline stops following while pressed."""
     if not raw:
         return [], []
     first = raw[:init_samples]
     baseline = envelope = sum(first) / len(first)
+    release = release_level(threshold)
+    refractory_samples = REFRACTORY_MS / 1000 * hz
     pressed = False
+    last_down = None
     activation, events = [], []
     for i, value in enumerate(raw):
         envelope = envelope * (1 - ENVELOPE_ALPHA) + value * ENVELOPE_ALPHA
@@ -67,17 +82,18 @@ def simulate_sketch(raw, threshold, init_samples=INIT_SAMPLES):
             baseline = baseline * (1 - BASELINE_ALPHA) + envelope * BASELINE_ALPHA
         level = envelope - baseline
         activation.append(level)
-        active = level > threshold
-        if active and not pressed:
+        rested = last_down is None or i - last_down >= refractory_samples
+        if not pressed and level > threshold and rested:
             pressed = True
+            last_down = i
             events.append((i, "DOWN"))
-        elif not active and pressed:
+        elif pressed and level < release:
             pressed = False
             events.append((i, "UP"))
     return activation, events
 
 
-def analyze(raw, rest, twitches, init_samples=INIT_SAMPLES):
+def analyze(raw, rest, twitches, init_samples=INIT_SAMPLES, hz=SAMPLE_HZ):
     """rest = (start, end) sample range of the relaxed part (it must come first: the sketch
     measures its baseline at rest); twitches = [(start, end), ...] one window per prompt."""
     rest_start, rest_end = rest
@@ -87,11 +103,11 @@ def analyze(raw, rest, twitches, init_samples=INIT_SAMPLES):
     rest_raw = raw[settled:rest_end]
 
     # 1) noise ceiling: the highest level at rest (nothing pressed, baseline follows freely)
-    free, _ = simulate_sketch(raw, float("inf"), init_samples)
+    free, _ = simulate_sketch(raw, float("inf"), init_samples, hz)
     ceiling = max(free[settled:rest_end])
 
     # 2) twitch peaks: baseline freezes as soon as the level leaves the noise, like a press would
-    held, _ = simulate_sketch(raw, ceiling, init_samples)
+    held, _ = simulate_sketch(raw, ceiling, init_samples, hz)
     peaks = [max(held[a:b]) if b > a else 0.0 for a, b in twitches]
     weakest = min(peaks) if peaks else 0.0
 
@@ -106,6 +122,7 @@ def analyze(raw, rest, twitches, init_samples=INIT_SAMPLES):
         "threshold": None,
         "false_downs_at_rest": None,
         "missed_twitches": None,
+        "double_twitches": None,    # prompts that gave more than one DOWN (chatter)
         "tight": False,
         "usable": False,        # True only if the replay at THRESHOLD is perfect (safe to write)
     }
@@ -118,14 +135,16 @@ def analyze(raw, rest, twitches, init_samples=INIT_SAMPLES):
         report["overlap"] = True                         # no whole number fits between them
         return report
     # ... then check it on the recording with the sketch's exact behaviour
-    _, events = simulate_sketch(raw, threshold, init_samples)
+    _, events = simulate_sketch(raw, threshold, init_samples, hz)
     downs = [i for i, state in events if state == "DOWN"]
+    per_window = [sum(a <= i < b for i in downs) for a, b in twitches]
     report["threshold"] = threshold
     report["false_downs_at_rest"] = sum(settled <= i < rest_end for i in downs)
-    report["missed_twitches"] = [n + 1 for n, (a, b) in enumerate(twitches)
-                                 if not any(a <= i < b for i in downs)]
+    report["missed_twitches"] = [n + 1 for n, count in enumerate(per_window) if count == 0]
+    report["double_twitches"] = [n + 1 for n, count in enumerate(per_window) if count > 1]
     report["tight"] = report["margin"] < TIGHT_MARGIN
-    report["usable"] = not report["false_downs_at_rest"] and not report["missed_twitches"]
+    report["usable"] = (not report["false_downs_at_rest"] and not report["missed_twitches"]
+                        and not report["double_twitches"])
     return report
 
 
@@ -153,6 +172,8 @@ def describe(report):
         lines.append(f"WARNING: on the recording this still triggers {report['false_downs_at_rest']}x at rest.")
     if report["missed_twitches"]:
         lines.append(f"WARNING: twitch(es) {report['missed_twitches']} would be missed on the recording.")
+    if report["double_twitches"]:
+        lines.append(f"WARNING: twitch(es) {report['double_twitches']} would fire more than one DOWN.")
     if not report["usable"]:
         lines.append("Not reliable enough to use: twitch firmly, and only on the prompts; "
                      "check the pads; then run this again.")
@@ -251,6 +272,28 @@ def listen(port, seconds, sleep=time.sleep):
     return listen_report(events, half)
 
 
+def current_threshold(text):
+    """"THRESHOLD = 144" from the sketch text (for messages)."""
+    match = re.search(r"const\s+int\s+THRESHOLD\s*=\s*(\d+)", text)
+    return f"THRESHOLD = {match.group(1)}" if match else "THRESHOLD not found"
+
+
+def final_check(port, text, seconds):
+    """Uploads the switch sketch, listens, prints the DOWN/UP counts. Returns the exit code."""
+    print("Uploading switch_emg.ino - keep your hand RELAXED...")
+    serial_tools.upload_sketch(serial_tools.stage_sketch("switch_emg", text), port)
+    result = listen(port, seconds)
+    print(f"\nAt rest:   {result['rest_downs']} DOWN, {result['rest_ups']} UP   (should be 0)")
+    print(f"Twitching: {result['twitch_downs']} DOWN, {result['twitch_ups']} UP   (one DOWN per twitch)")
+    if result["rest_downs"]:
+        print("False triggers at rest: run the calibration again with firmer pads, or raise THRESHOLD a little.")
+    elif not result["twitch_downs"]:
+        print("No twitches detected: twitch more firmly, check pad placement, or rerun the calibration.")
+    else:
+        print("Looks good. Commit the new THRESHOLD in hardware/switch_emg.ino if you want to keep it.")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Calibrate the EMG switch threshold")
     parser.add_argument("--port", help="e.g. COM3 (default: find the Arduino / CH340 port)")
@@ -259,11 +302,18 @@ def main(argv=None):
     parser.add_argument("--listen", type=float, default=20.0, help="final check length in seconds (default 20)")
     parser.add_argument("--dry-run", action="store_true",
                         help="measure and suggest only: don't change or upload switch_emg.ino")
+    parser.add_argument("--check-only", action="store_true",
+                        help="no recording: upload switch_emg.ino with its current THRESHOLD, run only the final check")
     args = parser.parse_args(argv)
 
     try:
         port = args.port or serial_tools.choose_port()
         serial_tools.find_arduino_cli()
+        if args.check_only:
+            with open(serial_tools.SWITCH_SKETCH, encoding="utf-8") as f:
+                text = f.read()
+            print(f"--check-only: no recording, using switch_emg.ino as it is ({current_threshold(text)}).")
+            return final_check(port, text, args.listen)
         print(f"Uploading the temporary raw-signal sketch to {port}...")
         serial_tools.upload_sketch(serial_tools.stage_sketch("emg_raw_stream", RAW_STREAM_SKETCH), port)
 
@@ -271,7 +321,7 @@ def main(argv=None):
         print(f"\nRecorded {len(raw)} samples ({rate:.0f} per second).")
         if rate < MIN_SAMPLE_HZ:
             print(f"WARNING: fewer than {MIN_SAMPLE_HZ}/s - the numbers may not match the real sketch.")
-        report = analyze(raw, rest, windows)
+        report = analyze(raw, rest, windows, hz=rate)
         print("\n".join(describe(report)))
 
         if not report["usable"]:
@@ -287,19 +337,7 @@ def main(argv=None):
         with open(serial_tools.SWITCH_SKETCH, "w", encoding="utf-8", newline="") as f:
             f.write(text)
         print(f"\nWrote THRESHOLD = {report['threshold']}, DEBUG = false into {serial_tools.SWITCH_SKETCH}")
-        print("Uploading switch_emg.ino - keep your hand RELAXED...")
-        serial_tools.upload_sketch(serial_tools.stage_sketch("switch_emg", text), port)
-
-        result = listen(port, args.listen)
-        print(f"\nAt rest:   {result['rest_downs']} DOWN, {result['rest_ups']} UP   (should be 0)")
-        print(f"Twitching: {result['twitch_downs']} DOWN, {result['twitch_ups']} UP   (about 5 expected)")
-        if result["rest_downs"]:
-            print("False triggers at rest: run the calibration again with firmer pads, or raise THRESHOLD a little.")
-        elif not result["twitch_downs"]:
-            print("No twitches detected: twitch more firmly, check pad placement, or rerun the calibration.")
-        else:
-            print("Looks good. Commit the new THRESHOLD in hardware/switch_emg.ino if you want to keep it.")
-        return 0
+        return final_check(port, text, args.listen)
     except (serial_tools.PortError, ValueError) as e:
         print(f"ERROR: {e}")
         return 1
