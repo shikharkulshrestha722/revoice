@@ -204,3 +204,23 @@ export function switchPillText(status, socketOpen) {
   if (!status || !socketOpen) return { text: "Switch: not connected — using spacebar", tone: "warn" };
   return { text: "Switch: using spacebar", tone: "neutral" };
 }
+
+// Space while scanning. Wherever focus is (the Input dropdown, Pause, a slider...), Space is the
+// switch: "press" = select, "block" = held-down repeat, just swallow it. "pass" = leave Space
+// alone: scanning off, guided banking open (Space records there) or a caregiver typing in a
+// text box. app.js calls preventDefault for anything but "pass", so Space never opens a
+// select, clicks a focused button or scrolls the page.
+const TEXT_INPUT_TYPES = new Set(["text", "search", "email", "url", "tel", "password", "number"]);
+
+export function isTextEntry(target) {
+  if (!target) return false;
+  const tag = String(target.tagName || "").toUpperCase();
+  if (tag === "TEXTAREA") return true;
+  if (tag === "INPUT") return TEXT_INPUT_TYPES.has(String(target.type || "text").toLowerCase());
+  return target.isContentEditable === true;
+}
+
+export function scanSpaceAction({ active, guidedOpen, code, repeat, target }) {
+  if (!active || guidedOpen || code !== "Space" || isTextEntry(target)) return "pass";
+  return repeat ? "block" : "press";          // holding Space down is ONE press
+}

@@ -332,6 +332,18 @@ textarea.composed-box:focus-visible { outline: 3px solid var(--accent); outline-
 .scan-state { font-weight: 600; color: var(--text); margin: 0; }
 
 .scan-grid { display: flex; flex-direction: column; gap: var(--space-2); }
+.scan-grid:focus { outline: none; }        /* focused only so Space reaches the page; rows show the state */
+.scan-focus-hint {
+  display: block;
+  width: 100%;
+  min-height: var(--target);
+  margin-bottom: var(--space-3);
+  font-weight: 600;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 2px dashed var(--warning-border);
+}
+.scan-focus-hint[hidden] { display: none; }
 .scan-row {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));

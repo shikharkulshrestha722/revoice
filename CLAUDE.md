@@ -65,6 +65,9 @@ frontend/   index.html, style.css
                          counting as the pointer), normalizeScanSettings, switchPillText.
                          app.js: Input "scanning" hides camera (loop skips tracking), handleSelect()
                          from Space or /ws/switch DOWN, SPEAK = speak() + pause until audio ends.
+                         Space: document keydown/keyup CAPTURE + preventDefault (scanSpaceAction:
+                         works on any focused control, not in text boxes); grid tabindex=-1 gets
+                         focus on entering scanning; window blur -> "Click here to resume scanning".
             tests/       node:test tests for the pure JS modules
 backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select,
                          DELETE /profiles/{id} (also calls Colab /forget_voices),

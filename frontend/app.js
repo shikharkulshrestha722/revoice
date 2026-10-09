@@ -7,7 +7,7 @@ import { emptySentence, pointerKey, choosePrediction, typed, textBoxKeyAction, i
          inputMethod } from "./compose.js";
 import { metricsLines, moreSimilarEngine, referenceLines } from "./metrics_format.js";
 import { Scanner, buildScanRows, applyScanSelection, normalizeScanSettings, SCAN_LIMITS,
-         parseSwitchMessage, switchPillText } from "./scanning.js";
+         parseSwitchMessage, switchPillText, scanSpaceAction, isTextEntry } from "./scanning.js";
 import { mixToMono, convertForUpload, waveformPeaks, speechChunks, speechSecondsInRange,
          hasAllowedExtension } from "./audio_prep.js";
 
@@ -680,7 +680,7 @@ function setScanningMode(on) {
       "If you miss, the rows start again."
     : "Hold the pointer still on a letter until the ring fills up.";
   clearInterval(scan.timer);
-  if (!on) { scanner.stop(); disconnectSwitch(); return; }
+  if (!on) { scanner.stop(); disconnectSwitch(); updateScanFocusHint(); return; }
   connectSwitch();
   trackStatusEl.textContent = "Scanning mode — no camera needed.";
   updateScanPredictions();
@@ -689,6 +689,7 @@ function setScanningMode(on) {
   scanner.start(performance.now());
   renderScan();
   scan.timer = setInterval(scanTick, 50);     // checks often; scanner decides when a step is due
+  focusScanGrid();                            // e.g. off the Input dropdown that was just used
 }
 
 function scanTick() {
@@ -848,20 +849,42 @@ function renderSwitchPill() {
   pill.title = switchLink.status?.error || "";           // why it isn't connected, for the caregiver
 }
 
-// Spacebar = the switch (testing without hardware). Not while typing, and not while guided
-// banking is open (Space records there).
-function spaceIsForScanning(e) {
-  return scan.active && e.code === "Space" && !isTypingTarget(e.target) &&
-         document.getElementById("guidedPanel").hidden;
+// Spacebar = the switch (a real key, or twitch_to_space.py pressing it). Listened for on the
+// whole document in the CAPTURE phase, so it works whatever control has focus (rules in
+// scanning.js scanSpaceAction). Buttons "click" on Space keyup, so keyup is blocked too.
+function scanSpace(e) {
+  return scanSpaceAction({ active: scan.active, guidedOpen: !document.getElementById("guidedPanel").hidden,
+                           code: e.code, repeat: e.repeat, target: e.target });
 }
 document.addEventListener("keydown", (e) => {
-  if (!spaceIsForScanning(e)) return;
-  e.preventDefault();                     // no page scroll, no "click" on a focused button
-  if (!e.repeat) handleSelect();          // holding Space down is ONE press
-});
+  const action = scanSpace(e);
+  if (action === "pass") return;
+  e.preventDefault();                     // no select opening, no button click, no scroll
+  e.stopPropagation();
+  if (action === "press") handleSelect();
+}, true);
 document.addEventListener("keyup", (e) => {
-  if (spaceIsForScanning(e)) e.preventDefault();
-});
+  if (scanSpace(e) === "pass") return;
+  e.preventDefault();
+  e.stopPropagation();
+}, true);
+
+// Key presses only reach the page while its window has focus. If it loses focus (another
+// window was clicked), show "Click here to resume scanning".
+function updateScanFocusHint() {
+  scanEl("scanFocusHint").hidden = !scan.active || document.hasFocus();
+}
+window.addEventListener("blur", updateScanFocusHint);
+window.addEventListener("focus", updateScanFocusHint);
+scanEl("scanFocusHint").onclick = () => focusScanGrid();
+
+// Takes focus off whatever control was used (e.g. the Input dropdown) and puts it on the grid.
+function focusScanGrid() {
+  const focused = document.activeElement;
+  if (focused && focused !== document.body && !isTextEntry(focused)) focused.blur();
+  scanEl("scanGrid").focus({ preventScroll: true });
+  updateScanFocusHint();
+}
 
 // User profiles (caregiver controls, so mouse-only is fine)
 let profiles = [];

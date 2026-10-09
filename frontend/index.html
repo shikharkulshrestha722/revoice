@@ -110,7 +110,10 @@
           <button id="scanPauseBtn" type="button" aria-pressed="false">Pause</button>
           <p id="scanState" class="scan-state" aria-live="polite"></p>
         </div>
-        <div id="scanGrid" class="scan-grid" aria-label="Scanning keyboard"></div>
+        <!-- shown when the browser window loses focus: Space (and twitch_to_space.py) can't reach the page -->
+        <button id="scanFocusHint" type="button" class="scan-focus-hint" hidden>Click here to resume scanning</button>
+        <!-- tabindex="-1": takes focus after choosing Scanning, so no control keeps it -->
+        <div id="scanGrid" class="scan-grid" tabindex="-1" aria-label="Scanning keyboard"></div>
         <!-- caregiver settings, saved in this browser -->
         <details class="scan-settings">
           <summary>Scanning settings</summary>

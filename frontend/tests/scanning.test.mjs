@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Scanner, buildScanRows, applyScanSelection, normalizeScanSettings, parseSwitchMessage,
-         switchPillText, SCAN_LETTER_ROWS } from "../scanning.js";
+         switchPillText, SCAN_LETTER_ROWS, scanSpaceAction, isTextEntry } from "../scanning.js";
 import { emptySentence } from "../compose.js";
 import { selectionSavings } from "../selection_stats.js";
 
@@ -198,4 +198,39 @@ test("status pill text", () => {
   assert.equal(switchPillText(on, false).tone, "warn", "server link lost");
   assert.deepEqual(switchPillText({ enabled: false }, true), { text: "Switch: using spacebar", tone: "neutral" });
   assert.equal(switchPillText(null, false).text, "Switch: not connected — using spacebar");
+});
+
+// Space while scanning: stand-ins for the focused element (tagName/type/isContentEditable)
+const focused = (tagName, extra = {}) => ({ tagName, ...extra });
+const space = (target, extra = {}) => ({ active: true, guidedOpen: false, code: "Space", repeat: false, target, ...extra });
+
+test("Space is the switch even when a control has focus (select, button, slider, checkbox)", () => {
+  for (const target of [focused("SELECT"), focused("BUTTON"), focused("INPUT", { type: "range" }),
+                        focused("INPUT", { type: "checkbox" }), focused("DIV"), focused("BODY"), null]) {
+    assert.equal(scanSpaceAction(space(target)), "press", target?.tagName ?? "nothing focused");
+  }
+});
+
+test("Space types normally in text boxes so caregivers can type", () => {
+  for (const target of [focused("TEXTAREA"), focused("INPUT"), focused("INPUT", { type: "text" }),
+                        focused("INPUT", { type: "search" }), focused("DIV", { isContentEditable: true })]) {
+    assert.equal(isTextEntry(target), true);
+    assert.equal(scanSpaceAction(space(target)), "pass");
+  }
+  assert.equal(isTextEntry(focused("SELECT")), false);
+  assert.equal(isTextEntry(focused("INPUT", { type: "range" })), false);
+});
+
+test("held-down Space is one press; other keys, scanning off and guided banking are left alone", () => {
+  assert.equal(scanSpaceAction(space(focused("BUTTON"), { repeat: true })), "block");   // swallowed, no 2nd press
+  assert.equal(scanSpaceAction(space(focused("SELECT"), { code: "Enter" })), "pass");
+  assert.equal(scanSpaceAction(space(focused("SELECT"), { active: false })), "pass"); // pointer modes unchanged
+  assert.equal(scanSpaceAction(space(focused("BODY"), { guidedOpen: true })), "pass"); // Space records there
+});
+
+test("Space while paused still reaches the scanner, which ignores it (Pause behaviour unchanged)", () => {
+  const { s } = ready();
+  s.setPaused(true, 5000);
+  assert.equal(scanSpaceAction(space(focused("BUTTON"))), "press");
+  assert.equal(s.press(5100), null);
 });
