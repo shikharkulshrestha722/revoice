@@ -1,4 +1,4 @@
-# ReVoice — Demo checklist: finger-twitch switch + scanning (+ Indian languages)
+# ReVoice — Demo checklist: switches + scanning (+ Indian languages)
 
 A short script for showing scanning mode, with a plan B if the hardware fails.
 Commands run in PowerShell from the `backend` folder, always with `py -3.10`.
@@ -32,6 +32,24 @@ Commands run in PowerShell from the `backend` folder, always with `py -3.10`.
 4. Select **SPEAK**: scanning shows "Paused while speaking…" and resumes after the audio.
    The log records these sentences as `scanning`.
 5. Show **Scanning settings**: slower steps for a tired patient, optional click sound.
+
+## IR switches: wristband (2 switches) or glasses (1 switch)
+
+Build, wiring, tuning and the "when the sensors arrive" checklist: `hardware/HARDWARE.md`.
+
+Before: sensors tuned on the person (`py -3.10 tools/ir_calibrate.py`, 10 presses = 10 counted,
+1 minute of rest = 0). Wired Uno: `SWITCH_SERIAL_PORT=COM3` in `backend/.env`, pill **connected**.
+Wireless ESP32: paired as "ReVoice Switch" (LED solid), ReVoice tab focused, power bank charged.
+
+1. Wristband: **Scanning settings → Switches: 2**. "She raises her index finger to move, her
+   middle finger to pick. Nothing moves until she does, so there's no time pressure."
+2. Spell a short word: NEXT to the row, SELECT, NEXT to the letter, SELECT. Show **↩ ROWS**
+   after a wrong row. Pick a prediction from the first row, then SPEAK.
+3. Glasses (one sensor): **Switches: 1**, the light moves by itself; a cheek raise picks.
+4. Show that brushing the hand past a sensor doesn't type anything (`MIN_HOLD_MS`).
+
+Plan B: keyboard (Space = SELECT, Enter / → = NEXT), or fake presses from a terminal:
+`Invoke-RestMethod -Method Post -Uri http://localhost:8000/switch/simulate -ContentType application/json -Body '{"state":"NEXT_DOWN"}'`
 
 ## Indian languages: IndicF5 (2 minutes)
 

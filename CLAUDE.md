@@ -64,7 +64,13 @@ frontend/   index.html, style.css
                          from GET /indic/languages + "typed text is" radios (localStorage
                          revoice.indic), #convertedBox above the player; compare sends F5 the
                          converted_text IndicF5 spoke; scan.progressText shows while scanning waits.
-            scanning.js PURE: single-switch row-column Scanner (time passed in: start/tick/
+            scanning.js 2-SWITCH: Scanner mode "auto" (1 switch, timed) | "step" (2 switches, no
+                         timer: next() moves, press() picks, BACK_CELL "↩ ROWS" ends every row via
+                         displayRows(); _wait in step = straight to row 0). settings.switches 1|2
+                         (scanModeFor). scanKeyAction: Space=select, Enter/NumpadEnter/ArrowRight=
+                         next only with 2 switches (scanSpaceAction kept as wrapper).
+                         parseSwitchMessage accepts NEXT_DOWN/NEXT_UP; app.js handleNext().
+                         PURE row-column Scanner (time passed in: start/tick/
                          press/setPaused/setRows/view), buildScanRows (row 0 = 3 predictions,
                          letters by frequency 7/row, controls SPACE/DEL/SPEAK/CLEAR),
                          applyScanSelection -> compose.js pointerKey/choosePrediction (same
@@ -134,12 +140,20 @@ backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select
 "
                          endings; wavs/ (22050 mono) if ffmpeg on PATH, else raw/ webm
                          (ffmpeg is NOT installed on this Windows machine).
-            switch_bridge.py  SwitchBridge: ONE reader thread for SWITCH_SERIAL_PORT (FastAPI
+            switch_bridge.py  also NEXT_DOWN/NEXT_UP (2nd switch), debounced PER SWITCH (SWITCH_OF).
+                         SwitchBridge: ONE reader thread for SWITCH_SERIAL_PORT (FastAPI
                          lifespan start/stop), only "DOWN"/"UP", 300 ms DOWN debounce, missing/
                          busy/unplugged -> warn once, retry 3 s. SwitchHub -> every /ws/switch
                          client via call_soon_threadsafe. GET /switch/status, POST
                          /switch/simulate {"state"} (debounced too). Tests use a fake port.
-            tools/       twitch_to_space.py (EMG DOWN -> pyautogui Space, 0.4 s lockout, --fake),
+            tools/       ir_logic.py PressDetector = the IR sketches' rules (30 ms debounce, MIN_HOLD_MS
+                         120 timed from the real start AND still near, 300 ms refractory), analog
+                         hysteresis THRESHOLD/2, sketch_settings/set_sketch_settings (tests check the
+                         numbers match both .ino). ir_calibrate.py (Uno: live NEAR/far + press
+                         counter; --sensor analog -> THRESHOLD; --save writes + uploads + listens).
+                         switch_upload.py --board uno|esp32 (esp32: -DUSE_NIMBLE, lists missing libs).
+                         twitch_to_space.py (EMG DOWN -> pyautogui Space, 0.4 s lockout, --fake;
+                         NEXT_DOWN -> Enter, own lockout),
                          emg_calibrate.py (raw-stream sketch, replays switch_emg.ino maths,
                          writes THRESHOLD only if the replay is perfect), serial_tools.py
                          (port detect, busy/missing messages, arduino-cli at C:\Program Files                         Arduino CLI; sketch staged into <name>/<name>.ino). Option A
@@ -244,4 +258,8 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
       Caregiver Validation (Confirm / Escalate / Override, toggleable)
 - [~] 5 Scanning mode + single switch: DONE spacebar + Arduino EMG via backend serial bridge
       (hardware/switch_emg.ino, tag `scanning-working`). Not done: blink/eyebrow, TCRT5000.
+- [~] Final review Phase 2 hardware switches (tag pre-hardware2): hardware/switch_ir (Uno),
+      hardware/switch_esp32_ble (ESP32 core 3.3.12 + T-vK BleKeyboard 0.3.2 + NimBLE-Arduino 1.4.3,
+      -DUSE_NIMBLE), 2-switch step scan, docs hardware/HARDWARE.md. Compiled, not yet run on
+      real sensors (they haven't arrived).
 - [ ] 6 Evaluation (generation CSV log, blind listening test, summary per engine)

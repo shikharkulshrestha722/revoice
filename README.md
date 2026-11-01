@@ -12,7 +12,10 @@ revoice/
 │   ├── data/       users and their recordings (created automatically, not in git)
 │   └── tests/      automated tests (Colab and Gemini are faked)
 ├── hardware/
-│   └── switch_emg.ino   Arduino sketch: EMG muscle sensor -> single switch ("DOWN"/"UP")
+│   ├── switch_emg.ino   Arduino sketch: EMG muscle sensor -> single switch ("DOWN"/"UP")
+│   ├── switch_ir/       Arduino Uno sketch: 1 or 2 IR proximity sensors (wristband / glasses)
+│   ├── switch_esp32_ble/ ESP32 sketch: the same sensors as a Bluetooth keyboard (Space / Enter)
+│   └── HARDWARE.md      builds, wiring, pairing, tuning, "when the sensors arrive" checklist
 └── colab/
     ├── revoice_server_v2.ipynb   the voice server (XTTS-v2 + F5-TTS + IndicF5) — the ONLY one to use
     ├── indicf5_test.ipynb        test only: Hindi (IndicF5) next to XTTS/F5 without breaking them
@@ -171,10 +174,11 @@ measured yet.
 it with the same consent as voice banking (the person, or their family/legal guardian), and
 tell listeners that the speech is generated.
 
-## Single switch: scanning mode
+## Switch scanning (1 or 2 switches)
 
 For a patient with **no pointing ability**: one switch is enough. The switch is a muscle
-(EMG) sensor read by an Arduino, or the **spacebar** for testing.
+(EMG) sensor or an IR proximity sensor read by an Arduino, an ESP32 Bluetooth switch, or the
+**spacebar** for testing. Builds, wiring and setup: [hardware/HARDWARE.md](hardware/HARDWARE.md).
 
 **How it works.** Rows light up one at a time (bright yellow). Press the switch when the
 row you want is lit; then the letters in that row light up one at a time — press again on
@@ -193,6 +197,21 @@ wrong row is never a trap. After each selection there is a short "Get ready…" 
   the "saved by prediction" figure works for scanning too.
 - The pill at the top says **Switch: connected on COM3**, **not connected (COM3) — using
   spacebar** (hover it to see why), or **using spacebar** (no port set).
+
+**Two switches (step scan).** *Scanning settings → Switches: 2*. Nothing moves by itself:
+**NEXT** moves the light one step (rows, then the cells of the chosen row) and **SELECT** picks.
+Every row ends with **↩ ROWS** to go back to choosing a row. Keyboard: Space = SELECT, Enter or
+→ = NEXT (only with 2 switches, so Enter keeps working normally otherwise). Hardware: the IR
+wristband (raise the middle finger = SELECT, the index finger = NEXT), wired through the
+backend bridge (`NEXT_DOWN` lines) or wireless as a Bluetooth keyboard (Space / Enter). With
+one sensor (e.g. on glasses at the cheek or eyebrow) use *Switches: 1*.
+
+**IR switches.** `hardware/switch_ir/switch_ir.ino` (Uno, wired) and
+`hardware/switch_esp32_ble/switch_esp32_ble.ino` (wireless) use the same rules: a press counts
+only if the sensor stays active for `MIN_HOLD_MS` (default 120 ms, ignores brushes and hand
+movement), then 300 ms before the next. `py -3.10 tools/ir_calibrate.py` shows each switch live
+(NEAR/far + a press counter) while you turn the module's potentiometer;
+`py -3.10 tools/switch_upload.py --board uno|esp32` compiles and uploads.
 
 ## Finger-twitch switch (Arduino + EMG sensor)
 
