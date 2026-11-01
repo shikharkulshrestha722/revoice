@@ -15,6 +15,7 @@ revoice/
 │   └── switch_emg.ino   Arduino sketch: EMG muscle sensor -> single switch ("DOWN"/"UP")
 └── colab/
     ├── revoice_server_v2.ipynb   the voice server (XTTS-v2 + F5-TTS) — the ONLY one to use
+    ├── indicf5_test.ipynb        test only: Hindi (IndicF5) next to XTTS/F5 without breaking them
     └── archive/                  old notebooks — do NOT run these
 ```
 
@@ -36,6 +37,9 @@ revoice/
    English accent estimate).
 6. Paste your ngrok token (https://dashboard.ngrok.com/get-started/your-authtoken) in Step 5.
 7. Run Step 6. The last line must say **ReVoice API v8**.
+
+Last checked on Colab with **Python 3.13 and torch 2.11** (November 2026): the install and
+version checks pass with the pinned versions unchanged.
 
 Our free ngrok domain is static, so the URL stays the same every session:
 `https://handcart-retrieval-mulch.ngrok-free.dev`

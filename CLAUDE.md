@@ -162,6 +162,13 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
                                       every metric is None on failure. speechbrain 1.1.1 is
                                       installed --no-deps before the final pin line. Audio is
                                       loaded with librosa at 16 kHz (no torchaudio file IO).
+            indicf5_test.ipynb        IndicF5 (Hindi etc.) TEST only, server notebook untouched: runs
+                                      Steps 1-4a unchanged, loads IndicF5 weights with our f5-tts 1.1.22
+                                      (method B = direct safetensors load; method A AutoModel fails with
+                                      a meta-tensor error), re-checks XTTS/F5/Whisper/SpeechBrain/versions.
+                                      T7: garbled Hindi start = F5's duration guess counts UTF-8 BYTES
+                                      (Devanagari 3/letter, English 1) -> ~3x too long; tries explicit
+                                      duration, short ref, Devanagari ref_text, combos, nfe 32 vs 64.
             archive/                  old notebooks — never run them (they broke things)
 ```
 
@@ -177,7 +184,8 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
 - Loop cost baseline ~2.5 ms/frame (laser mode, fake camera); re-measure after overlay changes.
 
 ## Hard-won constraints (do NOT change)
-- Colab runs Python 3.13. coqui-tts 0.27.5 needs transformers >=4.57, but transformers 5.x
+- Colab runs Python 3.13 with torch 2.11 (Nov 2026: Steps 2b-4a + indicf5_test T1-T6 all passed
+  with the pins below unchanged). coqui-tts 0.27.5 needs transformers >=4.57, but transformers 5.x
   removed `isin_mps_friendly`. Install order must stay:
   coqui-tts → f5-tts with `--no-deps` → its deps → ffmpeg → ONE final pinning line, LAST:
   `pip install -q tomli transformers_stream_generator boto3 bitsandbytes "transformers==4.57.6" "huggingface-hub>=0.34.0,<1.0" "tokenizers>=0.22.0,<=0.23.0" "numpy<2.3"`
