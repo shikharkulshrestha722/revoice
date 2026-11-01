@@ -38,6 +38,12 @@
     <div id="profileButtons" class="profile-buttons"></div>
     <button id="addUserBtn">+ Add user</button>
     <button id="deleteUserBtn" class="danger" hidden>Delete user</button>
+    <!-- caregiver PIN: protects this user's recordings (speaking never needs it) -->
+    <span id="lockState" class="lock-state" role="status" hidden></span>
+    <button id="unlockBtn" type="button" hidden>Unlock</button>
+    <button id="lockNowBtn" type="button" hidden>Lock now</button>
+    <button id="pinBtn" type="button" hidden>Set PIN</button>
+    <button id="auditBtn" type="button" hidden>Audit log</button>
     <span id="profileStatus" class="hint"></span>
   </div>
 
@@ -69,11 +75,35 @@
       I can ask for it to be deleted at any time.</span>
     </label>
 
+    <!-- caregiver PIN: needed later to play, download, add or delete this user's recordings -->
+    <fieldset class="pin-fields">
+      <legend>Caregiver PIN (4-6 digits)</legend>
+      <p class="hint">Protects the voice recordings from misuse. Speaking never needs it.</p>
+      <label for="newPin">PIN:</label>
+      <input id="newPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="new-password" />
+      <label for="newPin2">Repeat:</label>
+      <input id="newPin2" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="new-password" />
+    </fieldset>
+
     <div class="controls-row">
       <button id="createUserBtn" class="primary">Create user</button>
       <button id="cancelAddBtn">Cancel</button>
     </div>
     <p id="addUserStatus" class="hint"></p>
+  </div>
+
+  <!-- AUDIT LOG (caregiver, behind the PIN): who opened or changed the recordings -->
+  <div id="auditPanel" class="panel card" hidden>
+    <h2>Audit log</h2>
+    <p class="hint">Every attempt to open, add or delete this user's recordings, newest first.
+      It never contains a PIN or any audio.</p>
+    <div class="audit-scroll">
+      <table class="audit-table">
+        <thead><tr><th>Time</th><th>Action</th><th>Allowed</th><th>Why not</th></tr></thead>
+        <tbody id="auditRows"></tbody>
+      </table>
+    </div>
+    <button id="auditCloseBtn" type="button">Close</button>
   </div>
 
   <!-- HERO: the sentence the patient is composing (the most important thing on screen) -->
@@ -355,5 +385,23 @@
       }, 3000);
     })();
   </script>
+  <!-- caregiver PIN dialog: unlock, set a first PIN, or change it -->
+  <dialog id="pinDialog" class="pin-dialog" aria-labelledby="pinTitle">
+    <form id="pinForm">
+      <h2 id="pinTitle">Caregiver PIN</h2>
+      <p id="pinIntro" class="hint"></p>
+      <label id="pinOldRow">Current PIN
+        <input id="pinOld" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="current-password" /></label>
+      <label><span id="pinMainLabel">PIN</span>
+        <input id="pinMain" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="current-password" /></label>
+      <label id="pinRepeatRow">Repeat new PIN
+        <input id="pinRepeat" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="new-password" /></label>
+      <p id="pinError" class="pin-error" role="alert"></p>
+      <div class="controls-row">
+        <button id="pinOk" class="primary" type="submit">Unlock</button>
+        <button id="pinCancel" type="button">Cancel</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

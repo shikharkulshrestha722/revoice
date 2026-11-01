@@ -12,6 +12,7 @@ import { mixToMono, convertForUpload, waveformPeaks, speechChunks, speechSeconds
          hasAllowedExtension } from "./audio_prep.js";
 import { usesIndianLanguage, compareEngines, previewEngine, generatingMessage,
          convertedLabel } from "./indic.js";
+import { newPinProblem, pinPromptFor, formatWait, lockIndicator } from "./pin.js";
 
 // MediaPipe loads on first use of Finger mode, so a failed download can't break the camera.
 const MEDIAPIPE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
@@ -893,7 +894,9 @@ function renderSwitchPill() {
 // so it works whatever control has focus (rules in scanning.js scanKeyAction). Buttons "click"
 // on Space keyup and on Enter keydown, so both are blocked.
 function scanKey(e) {
-  return scanKeyAction({ active: scan.active, guidedOpen: !document.getElementById("guidedPanel").hidden,
+  // "guidedOpen" = scanning keys off: guided banking uses Space itself, and the PIN dialog needs its keys
+  return scanKeyAction({ active: scan.active,
+                         guidedOpen: !document.getElementById("guidedPanel").hidden || pinDialog.open,
                          code: e.code, repeat: e.repeat, target: e.target, switches: scan.settings.switches });
 }
 document.addEventListener("keydown", (e) => {
@@ -989,6 +992,7 @@ function applyProfileToVoiceControls() {
   engineEl.dataset.forcedForStock = isStock ? "yes" : "";
   updateIndicOptions();
 
+  refreshLockState();
   document.getElementById("voiceReference").value = activeProfile?.voice_reference || "auto";
   if (isStock) document.getElementById("voiceRefPreview").hidden = true;
   updateVoiceBankStatus();
@@ -1012,9 +1016,11 @@ document.getElementById("deleteUserBtn").onclick = async () => {
     `Delete "${name}" and ALL of their voice recordings?\n\nThis cannot be undone.`);
   if (!ok) return;
 
-  const res = await fetch(`/profiles/${encodeURIComponent(activeProfile.id)}`, { method: "DELETE" });
+  const deletedId = activeProfile.id;
+  const res = await protectedFetch(deletedId, `/profiles/${encodeURIComponent(deletedId)}`, { method: "DELETE" });
   const data = await res.json().catch(() => ({}));
   const statusEl = document.getElementById("profileStatus");
+  if (res.ok) pinTokens.delete(deletedId);
   await loadProfiles();
   if (!res.ok) {
     statusEl.textContent = "Delete failed: " + (data.error || res.status);
@@ -1026,6 +1032,156 @@ document.getElementById("deleteUserBtn").onclick = async () => {
     : `Deleted "${name}" and their recordings. (Colab was offline; its copy disappears when it restarts.)`;
   showToast(`Deleted "${name}" and their recordings.`);
 };
+
+// Caregiver PIN (backend/caregiver_pin.py). Recordings, guided banking, export, deleting a user
+// and the audit log need it; speaking, predictions and scanning never do. Session tokens are
+// kept in memory only, so reloading the page locks again.
+const pinTokens = new Map();                 // profile id -> session token
+const pinDialog = document.getElementById("pinDialog");
+const pinEl = (id) => document.getElementById(id);
+
+function pinHeaders(profileId) {
+  const token = pinTokens.get(profileId);
+  return token ? { "X-ReVoice-Token": token } : {};
+}
+
+// fetch() for protected endpoints: sends the token; if the user is locked (or has no PIN yet),
+// asks for the PIN once and tries again. prompt: false = background refresh, never asks.
+async function protectedFetch(profileId, url, options = {}, { prompt = true } = {}) {
+  const send = () => fetch(url, { ...options, headers: { ...(options.headers || {}), ...pinHeaders(profileId) } });
+  let res = await send();
+  if (res.ok || !prompt) return res;
+  const body = await res.clone().json().catch(() => ({}));
+  const mode = pinPromptFor(res.status, body);
+  if (mode && await askPin(profileId, mode, body.error)) res = await send();
+  return res;
+}
+
+const PIN_MODES = {
+  unlock: { title: (n) => `Unlock ${n}'s recordings`, ok: "Unlock", main: "PIN", old: false, repeat: false,
+            url: (id) => `/profiles/${id}/unlock`, intro: "Enter the caregiver PIN." },
+  set: { title: (n) => `Set a caregiver PIN for ${n}`, ok: "Set PIN", main: "New PIN", old: false, repeat: true,
+         url: (id) => `/profiles/${id}/pin`,
+         intro: "4-6 digits. It protects the voice recordings from misuse; speaking never needs it." },
+  change: { title: (n) => `Change ${n}'s caregiver PIN`, ok: "Change PIN", main: "New PIN", old: true, repeat: true,
+            url: (id) => `/profiles/${id}/pin`, intro: "Enter the current PIN, then the new one twice." },
+};
+
+// The PIN dialog. Resolves true once the user is unlocked (token saved), false if cancelled.
+function askPin(profileId, mode, reason = "") {
+  if (pinDialog.open) return Promise.resolve(false);
+  const m = PIN_MODES[mode];
+  const name = profiles.find((p) => p.id === profileId)?.name || "this user";
+  pinEl("pinTitle").textContent = m.title(name);
+  pinEl("pinIntro").textContent = mode === "set" && reason ? reason : m.intro;
+  pinEl("pinMainLabel").textContent = m.main;
+  pinEl("pinOldRow").hidden = !m.old;
+  pinEl("pinRepeatRow").hidden = !m.repeat;
+  pinEl("pinOk").textContent = m.ok;
+  pinEl("pinOk").disabled = false;
+  pinEl("pinError").textContent = "";
+  for (const id of ["pinOld", "pinMain", "pinRepeat"]) pinEl(id).value = "";
+
+  return new Promise((resolve) => {
+    let unlocked = false;
+    pinEl("pinForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const pin = pinEl("pinMain").value;
+      const problem = m.repeat ? newPinProblem(pin, pinEl("pinRepeat").value) : (pin ? "" : "Enter the PIN.");
+      if (problem) { pinEl("pinError").textContent = problem; return; }
+      const form = new FormData();
+      if (mode === "unlock") form.append("pin", pin);
+      else { form.append("new_pin", pin); form.append("old_pin", pinEl("pinOld").value); }
+      pinEl("pinOk").disabled = true;
+      const res = await fetch(m.url(encodeURIComponent(profileId)), { method: "POST", body: form });
+      const data = await res.json().catch(() => ({}));
+      pinEl("pinOk").disabled = false;
+      if (!res.ok) {                                      // wrong PIN / locked out: stay open, say why
+        pinEl("pinError").textContent = data.code === "locked_out"
+          ? `Too many wrong PINs. Try again in ${formatWait(data.retry_after)}.` : (data.error || `Error ${res.status}`);
+        for (const id of ["pinOld", "pinMain", "pinRepeat"]) pinEl(id).value = "";
+        refreshLockState();
+        return;
+      }
+      pinTokens.set(profileId, data.token);
+      unlocked = true;
+      pinDialog.close();
+      showToast(mode === "unlock" ? `Unlocked ${name}'s recordings for 15 minutes.` : `Caregiver PIN saved for ${name}.`);
+    };
+    pinEl("pinCancel").onclick = () => pinDialog.close();
+    pinDialog.onclose = () => { refreshLockState(); resolve(unlocked); };
+    pinDialog.showModal();
+    pinEl(m.old ? "pinOld" : "pinMain").focus();
+  });
+}
+
+// Lock indicator + buttons for the selected user (checked again every 30 s).
+async function refreshLockState() {
+  const ids = ["lockState", "unlockBtn", "lockNowBtn", "pinBtn", "auditBtn"];
+  if (!activeProfile) { for (const id of ids) pinEl(id).hidden = true; return; }
+  const pid = activeProfile.id;
+  let status = null;
+  try {
+    const res = await fetch(`/profiles/${encodeURIComponent(pid)}/lock_status`, { headers: pinHeaders(pid) });
+    status = res.ok ? await res.json() : null;
+  } catch { /* backend not reachable: leave it blank */ }
+  if (pid !== activeProfile?.id) return;            // the user changed meanwhile
+  if (status && !status.seconds_left) pinTokens.delete(pid);         // expired or locked elsewhere
+  const view = lockIndicator(status);
+  pinEl("lockState").textContent = view.text;
+  pinEl("lockState").className = `lock-state ${view.state}`;
+  pinEl("lockState").hidden = !view.text;
+  pinEl("unlockBtn").hidden = view.state !== "locked";
+  pinEl("lockNowBtn").hidden = view.state !== "unlocked";
+  pinEl("pinBtn").hidden = !status;
+  pinEl("pinBtn").textContent = status?.pin_set ? "Change PIN" : "Set PIN";
+  pinEl("auditBtn").hidden = !status?.pin_set;
+}
+setInterval(refreshLockState, 30000);
+
+pinEl("unlockBtn").onclick = () => activeProfile && askPin(activeProfile.id, "unlock");
+pinEl("pinBtn").onclick = async () => {
+  if (!activeProfile) return;
+  const res = await fetch(`/profiles/${encodeURIComponent(activeProfile.id)}/lock_status`);
+  const pinSet = res.ok && (await res.json()).pin_set;
+  askPin(activeProfile.id, pinSet ? "change" : "set");
+};
+pinEl("lockNowBtn").onclick = async () => {
+  if (!activeProfile) return;
+  const pid = activeProfile.id;
+  await fetch(`/profiles/${encodeURIComponent(pid)}/lock`, { method: "POST" });
+  pinTokens.delete(pid);
+  // panels that show recordings close with the lock
+  if (guided.profileId === pid) closeGuidedPanel();
+  if (upload.profileId === pid) closeUploadPanel();
+  pinEl("auditPanel").hidden = true;
+  refreshLockState();
+  updateReferenceClipChoice();
+  showToast(`${activeProfile.name}'s recordings are locked.`);
+};
+
+pinEl("auditBtn").onclick = async () => {
+  if (!activeProfile) return;
+  const pid = activeProfile.id;
+  const res = await protectedFetch(pid, `/profiles/${encodeURIComponent(pid)}/audit`);
+  if (!res.ok) { showToast("The audit log needs the caregiver PIN.", "error"); return; }
+  const { rows } = await res.json();
+  pinEl("auditRows").replaceChildren(...rows.map((r) => {
+    const tr = document.createElement("tr");
+    if (r.allowed !== "yes") tr.className = "denied";
+    for (const text of [new Date(r.timestamp).toLocaleString(), r.action.replaceAll("_", " "),
+                        r.allowed, r.detail]) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    return tr;
+  }));
+  if (!rows.length) pinEl("auditRows").innerHTML = '<tr><td colspan="4">Nothing yet.</td></tr>';
+  pinEl("auditPanel").hidden = false;
+  pinEl("auditPanel").scrollIntoView({ behavior: scrollMotion() });
+};
+pinEl("auditCloseBtn").onclick = () => { pinEl("auditPanel").hidden = true; };
 
 // Add user panel
 const addUserPanel = document.getElementById("addUserPanel");
@@ -1096,12 +1252,16 @@ document.getElementById("createUserBtn").onclick = async () => {
     statusEl.textContent = "Please tick the consent box before cloning a voice.";
     return;
   }
+  const pin = document.getElementById("newPin").value;
+  const pinProblem = newPinProblem(pin, document.getElementById("newPin2").value);
+  if (pinProblem) { statusEl.textContent = "Caregiver PIN: " + pinProblem; return; }
 
   const formData = new FormData();
   formData.append("name", name);
   formData.append("voice_type", cloned ? "cloned" : voiceType);
   formData.append("stock_speaker", voiceType === "stock" ? document.getElementById("stockSpeaker").value : "");
   formData.append("consent_given", cloned && consent ? "true" : "false");
+  formData.append("pin", pin);
 
   const res = await fetch("/profiles", { method: "POST", body: formData });
   const data = await res.json().catch(() => ({}));
@@ -1109,6 +1269,8 @@ document.getElementById("createUserBtn").onclick = async () => {
     statusEl.textContent = "Error: " + (data.error || res.status);
     return;
   }
+  if (data.token) pinTokens.set(data.id, data.token);   // unlocked at once, to start recording
+  for (const id of ["newPin", "newPin2"]) document.getElementById(id).value = "";
 
   // reset and close the form, then show the new (selected) user
   document.getElementById("newName").value = "";
@@ -1180,7 +1342,14 @@ async function updateReferenceClipChoice() {
   const select = document.getElementById("referenceClip");
   select.hidden = activeProfile?.voice_reference !== "uploads";
   if (select.hidden) return;
-  const data = await (await fetch(`/uploads?profile_id=${encodeURIComponent(activeProfile.id)}`)).json();
+  const res = await protectedFetch(activeProfile.id, `/uploads?profile_id=${encodeURIComponent(activeProfile.id)}`,
+                                   {}, { prompt: false });
+  select.disabled = !res.ok;
+  if (!res.ok) {                    // locked: the list of recordings needs the PIN
+    select.replaceChildren(new Option("Unlock (caregiver PIN) to choose one clip", activeProfile.reference_clip || ""));
+    return;
+  }
+  const data = await res.json();
   const options = [new Option("All uploads (most speech first)", "")];
   for (const c of data.clips || []) {
     options.push(new Option(`${c.original_name} (#${c.id}) · ${c.duration_s.toFixed(1)} s, ` +
@@ -1265,7 +1434,7 @@ document.getElementById("recordBtn").onclick = async () => {
     formData.append("file", blob, "clip.webm");
 
     statusEl.textContent = "Uploading...";
-    const res = await fetch("/upload_voice_clip", { method: "POST", body: formData });
+    const res = await protectedFetch(profileId, "/upload_voice_clip", { method: "POST", body: formData });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       statusEl.textContent = "Upload failed: " + (data.error || res.status);
@@ -1619,6 +1788,11 @@ async function openGuidedPanel() {
       : "Press Record (or Space), read the sentence, then press Stop.";
   } catch (err) {
     console.error(err);
+    if (err.code === "locked" || err.code === "pin_not_set") {      // PIN dialog was cancelled
+      closeGuidedPanel();
+      showToast("Guided voice banking needs the caregiver PIN.", "error");
+      return;
+    }
     guidedEl("guidedStatus").textContent = "Could not start: " + (err.message || err.name) +
       " (allow the microphone and make sure the backend is running).";
   }
@@ -1639,9 +1813,10 @@ function closeGuidedPanel() {
 }
 
 async function refreshGuidedStatus() {
-  const res = await fetch(`/guided/status?profile_id=${encodeURIComponent(guided.profileId)}`);
-  guided.status = await res.json();
-  if (!res.ok) throw new Error(guided.status.error || res.status);
+  const res = await protectedFetch(guided.profileId, `/guided/status?profile_id=${encodeURIComponent(guided.profileId)}`);
+  const data = await res.json();
+  if (!res.ok) throw Object.assign(new Error(data.error || res.status), { code: data.code });
+  guided.status = data;
   showGuidedProgress();
 }
 
@@ -1804,7 +1979,7 @@ function toggleGuidedRecording() {
     formData.append("duration_s", seconds.toFixed(2));
     formData.append("profile_id", profileId);
     formData.append("file", blob, `${sentence.id}.webm`);
-    const res = await fetch("/guided/record", { method: "POST", body: formData });
+    const res = await protectedFetch(profileId, "/guided/record", { method: "POST", body: formData });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       statusEl.textContent = "Save failed: " + (data.error || res.status);
@@ -1836,13 +2011,18 @@ function toggleGuidedRecording() {
   statusEl.textContent = "Recording... read the sentence, then press Stop (or Space).";
 }
 
-function playGuided() {
+async function playGuided() {
   const s = guided.sentences[guided.index];
   const audioEl = guidedEl("guidedAudio");
   if (guided.lastTakeUrl) audioEl.src = guided.lastTakeUrl;
   else if (guided.status?.recorded[s.id]) {
-    // the time stamp stops the browser playing an old take after a redo
-    audioEl.src = `/guided/audio/${s.id}?profile_id=${encodeURIComponent(guided.profileId)}&t=${Date.now()}`;
+    // fetched with the PIN token (an <audio src> can't send it); the time stamp avoids an old take
+    const res = await protectedFetch(guided.profileId,
+      `/guided/audio/${s.id}?profile_id=${encodeURIComponent(guided.profileId)}&t=${Date.now()}`);
+    if (!res.ok) { guidedEl("guidedStatus").textContent = "Playing needs the caregiver PIN."; return; }
+    if (guided.playUrl) URL.revokeObjectURL(guided.playUrl);
+    guided.playUrl = URL.createObjectURL(await res.blob());
+    audioEl.src = guided.playUrl;
   } else return;
   audioEl.play();
 }
@@ -1854,7 +2034,7 @@ async function skipGuided() {
     const formData = new FormData();
     formData.append("sentence_id", s.id);
     formData.append("profile_id", guided.profileId);
-    const res = await fetch("/guided/skip", { method: "POST", body: formData });
+    const res = await protectedFetch(guided.profileId, "/guided/skip", { method: "POST", body: formData });
     if (res.ok) { guided.status = await res.json(); showGuidedProgress(); }
   }
   goToGuided(guided.index + 1);
@@ -1867,15 +2047,22 @@ guidedEl("guidedPlayBtn").onclick = playGuided;
 guidedEl("guidedSkipBtn").onclick = skipGuided;
 guidedEl("guidedPrevBtn").onclick = () => goToGuided(guided.index - 1);
 
-guidedEl("guidedExportBtn").onclick = () => {
-  // the server replies with a zip "attachment", so this downloads instead of navigating away
-  window.location.href = `/profiles/${encodeURIComponent(guided.profileId)}/export`;
+guidedEl("guidedExportBtn").onclick = async () => {
+  // fetched with the PIN token (a plain link can't send it), then saved as a file
+  const pid = guided.profileId;
+  const res = await protectedFetch(pid, `/profiles/${encodeURIComponent(pid)}/export`);
+  if (!res.ok) { showToast("Export needs the caregiver PIN.", "error"); return; }
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(await res.blob());
+  link.download = `revoice_dataset_${pid}.zip`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 10000);
 };
 
 guidedEl("guidedRefsBtn").onclick = async () => {
   const formData = new FormData();
   formData.append("profile_id", guided.profileId);
-  const res = await fetch("/guided/references", { method: "POST", body: formData });
+  const res = await protectedFetch(guided.profileId, "/guided/references", { method: "POST", body: formData });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) { guidedEl("guidedRefsStatus").textContent = "Error: " + (data.error || res.status); return; }
   guided.status = data;
@@ -1884,7 +2071,7 @@ guidedEl("guidedRefsBtn").onclick = async () => {
 
 // shortcuts only while the panel is open and not while typing (Space must type a space in a text box)
 document.addEventListener("keydown", (e) => {
-  if (guidedEl("guidedPanel").hidden || isTypingTarget(e.target)) return;
+  if (guidedEl("guidedPanel").hidden || pinDialog.open || isTypingTarget(e.target)) return;
   if (e.code === "Space") { e.preventDefault(); toggleGuidedRecording(); }
   else if (e.key === "ArrowRight") skipGuided();
   else if (e.key === "ArrowLeft") goToGuided(guided.index - 1);
@@ -2120,7 +2307,7 @@ uploadEl("uploadSaveBtn").onclick = async () => {
       formData.append("consent", "true");
       formData.append("consented_by", consentName);
       formData.append("file", toUploadWav(item), "clip.wav");
-      const res = await fetch("/uploads", { method: "POST", body: formData });
+      const res = await protectedFetch(upload.profileId, "/uploads", { method: "POST", body: formData });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `server returned ${res.status}`);
       item.status = "saved";
@@ -2140,8 +2327,9 @@ uploadEl("uploadSaveBtn").onclick = async () => {
 
 // clips already saved for this person
 async function refreshSavedUploads() {
-  const res = await fetch(`/uploads?profile_id=${encodeURIComponent(upload.profileId)}`);
+  const res = await protectedFetch(upload.profileId, `/uploads?profile_id=${encodeURIComponent(upload.profileId)}`);
   if (res.ok) showSavedUploads(await res.json());
+  else uploadEl("uploadSaved").textContent = "Locked: the list of recordings needs the caregiver PIN.";
 }
 
 function showSavedUploads(data) {
@@ -2157,8 +2345,9 @@ function showSavedUploads(data) {
     del.textContent = "Delete";
     del.onclick = async () => {
       if (!confirm(`Delete "${clip.original_name}" from ${activeProfile?.name || "this user"}?`)) return;
-      const r = await fetch(`/uploads/${clip.id}?profile_id=${encodeURIComponent(upload.profileId)}`,
-                            { method: "DELETE" });
+      const r = await protectedFetch(upload.profileId,
+                                     `/uploads/${clip.id}?profile_id=${encodeURIComponent(upload.profileId)}`,
+                                     { method: "DELETE" });
       if (r.ok) showSavedUploads(await r.json());
     };
     row.appendChild(del);

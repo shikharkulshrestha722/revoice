@@ -909,3 +909,32 @@ audio[src], .metrics, .ref-text, .ref-used { animation: fade-in 200ms ease-out b
   from { opacity: 0; transform: translateY(10px); }
   to   { opacity: 1; transform: none; }
 }
+
+/* Caregiver PIN: lock indicator, PIN fields, dialog, audit log */
+.lock-state { font-size: var(--text-sm); font-weight: 600; padding: 2px var(--space-2); border-radius: 999px; }
+.lock-state[hidden] { display: none; }
+.lock-state.unlocked { color: var(--text); background: var(--accent-soft); }
+.lock-state.locked, .lock-state.no_pin { color: var(--text); background: var(--surface-2); }
+.lock-state.locked_out { color: var(--danger); background: var(--danger-soft); }
+
+.pin-fields { border: 1px solid var(--border); border-radius: var(--radius-sm); margin: var(--space-2) 0; padding: var(--space-2) var(--space-3); }
+.pin-fields input, .pin-dialog input { width: 9ch; font-size: var(--text-lg); letter-spacing: 0.2em; }
+
+.pin-dialog {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: var(--space-4, 24px);
+  width: min(420px, calc(100vw - 32px));
+}
+.pin-dialog::backdrop { background: rgb(0 0 0 / 0.45); }
+.pin-dialog h2 { margin-top: 0; }
+.pin-dialog label { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin: var(--space-2) 0; }
+.pin-dialog label[hidden] { display: none; }
+.pin-error { color: var(--danger); min-height: 1.4em; margin: var(--space-2) 0; font-weight: 600; }
+
+.audit-scroll { max-height: 360px; overflow: auto; margin: var(--space-2) 0; }
+.audit-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.audit-table th, .audit-table td { text-align: left; padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--border); }
+.audit-table tr.denied td { color: var(--danger); }
