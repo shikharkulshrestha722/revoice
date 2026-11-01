@@ -56,3 +56,28 @@ def no_real_serial_port(monkeypatch):
         raise AssertionError(f"Test tried to open a REAL serial port: {args or kwargs}")
     monkeypatch.setattr(serial, "Serial", refuse)
     monkeypatch.setattr(serial, "serial_for_url", refuse)
+
+
+@pytest.fixture(autouse=True)
+def pin_guard(monkeypatch, tmp_path):
+    """Caregiver PIN: a fresh guard and audit log per test, and fast hashing (the real 200 000
+    PBKDF2 rounds would make every test slow). The PIN check itself is OFF here, so the older
+    tests keep testing what they test; tests about the PIN switch it on with the pin_on fixture."""
+    import caregiver_pin
+    from caregiver_pin import PinGuard
+    monkeypatch.setattr(caregiver_pin, "ITERATIONS", 1000)
+    monkeypatch.setattr(backend, "AUDIT_LOG", str(tmp_path / "data" / "audit_log.csv"))
+    fresh = PinGuard()
+    monkeypatch.setattr(backend, "guard", fresh)
+    monkeypatch.setattr(backend, "require_unlocked", lambda profile, token, action: None)
+    return fresh
+
+
+REAL_REQUIRE_UNLOCKED = backend.require_unlocked
+
+
+@pytest.fixture
+def pin_on(monkeypatch, pin_guard):
+    """The real PIN check, for the tests about it."""
+    monkeypatch.setattr(backend, "require_unlocked", REAL_REQUIRE_UNLOCKED)
+    return pin_guard

@@ -1,7 +1,7 @@
 """ReVoice backend: serves the page, stores profiles and recordings, and relays to Gemini and Colab."""
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, Form, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, Form, Header, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
@@ -20,6 +20,8 @@ from guided_sentences import GUIDED_SENTENCES, SESSION_SIZE
 from dataset_export import build_dataset_zip
 from generation_log import log_generation, summarize
 from switch_bridge import SwitchBridge, SwitchHub, VALID_STATES
+from caregiver_pin import (AccessDenied, PinGuard, TOKEN_HEADER, TOKEN_IDLE_S, audit, check_new_pin,
+                           hash_pin, read_audit)
 from indic_languages import (LANGUAGES, TEXT_MODES, ConversionError, convert_text, finish_indic_text,
                              in_target_script, language_list)
 
@@ -157,6 +159,7 @@ async def indic_languages():
 DATA_DIR = os.environ.get("REVOICE_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
 store = ProfileStore(DATA_DIR)
 GENERATION_LOG = os.path.join(DATA_DIR, "generation_log.csv")
+AUDIT_LOG = os.path.join(DATA_DIR, "audit_log.csv")      # who opened/changed recordings (caregiver_pin.py)
 
 # Used only when Colab is offline; the live list comes from Colab's /speakers.
 FALLBACK_STOCK_SPEAKERS = [
@@ -183,6 +186,98 @@ def resolve_profile(profile_id: str = "") -> dict:
     return store.get(profile_id)
 
 
+# Caregiver PIN (caregiver_pin.py). Needed for: listing, playing, downloading, uploading and
+# deleting recordings, guided banking, dataset export, deleting a user, the audit log.
+# NEVER for /speak, /predict or scanning: the patient can always talk.
+guard = PinGuard()
+
+
+@app.exception_handler(AccessDenied)
+async def access_denied(request: Request, exc: AccessDenied):
+    return JSONResponse(exc.body(), status_code=exc.status)
+
+
+def require_unlocked(profile: dict, token: str, action: str):
+    """Lets a protected action through only with a valid session token for this user.
+    Every attempt, allowed or not, goes in the audit log."""
+    pid = profile["id"]
+    if not profile["pin_set"]:
+        audit(AUDIT_LOG, pid, action, False, "no PIN set yet")
+        raise AccessDenied(403, "pin_not_set", f"Set a caregiver PIN for {profile['name']} first: "
+                                               "it protects their voice recordings.", profile_id=pid)
+    if not guard.use(token, pid):
+        audit(AUDIT_LOG, pid, action, False, "locked")
+        raise AccessDenied(401, "locked", f"Locked: enter {profile['name']}'s caregiver PIN.", profile_id=pid)
+    audit(AUDIT_LOG, pid, action, True)
+
+
+def session_reply(profile_id: str) -> dict:
+    """A new session token for this user (the page keeps it in memory only)."""
+    return {"token": guard.issue(profile_id), "token_seconds": TOKEN_IDLE_S}
+
+
+# PBKDF2 takes ~0.1 s, so these are plain `def` (worker thread), like the Colab/Gemini endpoints.
+@app.post("/profiles/{profile_id}/unlock")
+def unlock_profile(profile_id: str, pin: str = Form(...)):
+    """Correct PIN -> session token. 5 wrong in a row -> locked out for 5 minutes."""
+    profile = store.get(profile_id)
+    record = store.pin_record(profile_id)
+    if not record:
+        raise AccessDenied(403, "pin_not_set", f"{profile['name']} has no caregiver PIN yet: set one.",
+                           profile_id=profile_id)
+    try:
+        guard.check_pin(profile_id, record, pin)
+    except AccessDenied as e:
+        audit(AUDIT_LOG, profile_id, "unlock", False, e.code)
+        raise
+    audit(AUDIT_LOG, profile_id, "unlock", True)
+    return session_reply(profile_id)
+
+
+@app.post("/profiles/{profile_id}/lock")
+async def lock_profile(profile_id: str):
+    """"Lock now": ends every session of this user (needs no PIN: locking is always safe)."""
+    store.get(profile_id)
+    guard.lock_profile(profile_id)
+    audit(AUDIT_LOG, profile_id, "lock", True)
+    return {"locked": True}
+
+
+@app.post("/profiles/{profile_id}/pin")
+def set_pin(profile_id: str, new_pin: str = Form(...), old_pin: str = Form("")):
+    """Sets the PIN (first time: no old PIN) or changes it (the old PIN is required and counts
+    towards the lockout). Old sessions end; a new token is returned."""
+    store.get(profile_id)
+    check_new_pin(new_pin)
+    record = store.pin_record(profile_id)
+    action = "change_pin" if record else "set_pin"
+    if record:
+        try:
+            guard.check_pin(profile_id, record, old_pin)
+        except AccessDenied as e:
+            audit(AUDIT_LOG, profile_id, action, False, e.code)
+            raise
+    store.set_pin_record(profile_id, hash_pin(new_pin))
+    guard.lock_profile(profile_id)
+    audit(AUDIT_LOG, profile_id, action, True)
+    return session_reply(profile_id)
+
+
+@app.get("/profiles/{profile_id}/lock_status")
+async def lock_status(profile_id: str, token: str = Header("", alias=TOKEN_HEADER)):
+    """For the lock indicator: PIN set? unlocked (and for how long)? locked out?"""
+    profile = store.get(profile_id)
+    return {"pin_set": profile["pin_set"], "seconds_left": guard.seconds_left(token, profile_id),
+            "locked_out_seconds": guard.locked_out_for(profile_id)}
+
+
+@app.get("/profiles/{profile_id}/audit")
+async def audit_log(profile_id: str, token: str = Header("", alias=TOKEN_HEADER)):
+    """This user's audit log, newest first (behind the PIN; holds no PIN or audio)."""
+    require_unlocked(store.get(profile_id), token, "view_audit_log")
+    return {"rows": read_audit(AUDIT_LOG, profile_id)}
+
+
 @app.get("/profiles")
 async def list_profiles():
     """All users, plus which one is selected."""
@@ -190,17 +285,25 @@ async def list_profiles():
 
 
 @app.post("/profiles")
-async def create_profile(
+def create_profile(
     name: str = Form(...),
     voice_type: str = Form("cloned"),
     stock_speaker: str = Form(""),
     consent_given: bool = Form(False),
+    pin: str = Form(""),
 ):
-    """Adds a user and selects them."""
+    """Adds a user and selects them. With a caregiver PIN, the reply also has a session token,
+    so the caregiver can start recording at once."""
+    if pin:
+        check_new_pin(pin)                     # before anything is created
     profile = store.create(name, voice_type, stock_speaker, consent_given)
     store.select(profile["id"])
     print(f"[profiles] created {profile['id']} ({voice_type})")
-    return store.get(profile["id"])
+    if not pin:
+        return store.get(profile["id"])
+    store.set_pin_record(profile["id"], hash_pin(pin))
+    audit(AUDIT_LOG, profile["id"], "set_pin", True, "new user")
+    return {**store.get(profile["id"]), **session_reply(profile["id"])}
 
 
 @app.post("/profiles/{profile_id}/select")
@@ -209,9 +312,11 @@ async def select_profile(profile_id: str):
 
 
 @app.delete("/profiles/{profile_id}")
-def delete_profile(profile_id: str):
+def delete_profile(profile_id: str, token: str = Header("", alias=TOKEN_HEADER)):
     """Deletes a user and all their recordings, and asks Colab to forget cached voices (best effort)."""
+    require_unlocked(store.get(profile_id), token, "delete_profile")
     store.delete(profile_id)
+    guard.forget_profile(profile_id)
     print(f"[profiles] deleted {profile_id}")
     try:
         r = call_colab("post", "/forget_voices", timeout=10)
@@ -237,11 +342,12 @@ def stock_speakers():
 
 @app.post("/upload_voice_clip")
 async def upload_voice_clip(emotion: str = Form(...), file: UploadFile = None,
-                            profile_id: str = Form("")):
+                            profile_id: str = Form(""), token: str = Header("", alias=TOKEN_HEADER)):
     """Saves a recorded voice clip for one emotion."""
+    profile = resolve_profile(profile_id)
+    require_unlocked(profile, token, "record_clip")          # the PIN check comes first
     if file is None:
         raise ProfileError("No audio file was sent.")
-    profile = resolve_profile(profile_id)
     extension = os.path.splitext(file.filename or "")[1] or ".webm"
     count = store.add_clip(profile["id"], emotion, await file.read(), extension)
     return {"status": "saved", "profile": profile["id"], "emotion": emotion, "clips": count}
@@ -263,66 +369,81 @@ async def guided_sentences():
 
 
 @app.get("/guided/status")
-async def guided_status(profile_id: str = ""):
+async def guided_status(profile_id: str = "", token: str = Header("", alias=TOKEN_HEADER)):
     """Progress, total length, and the next sentence to record."""
-    return store.guided_status(resolve_profile(profile_id)["id"])
+    profile = resolve_profile(profile_id)
+    require_unlocked(profile, token, "guided_status")
+    return store.guided_status(profile["id"])
 
 
 @app.post("/guided/record")
 async def guided_record(sentence_id: str = Form(...), duration_s: float = Form(...),
-                        file: UploadFile = None, profile_id: str = Form("")):
+                        file: UploadFile = None, profile_id: str = Form(""), token: str = Header("", alias=TOKEN_HEADER)):
     """Saves one guided recording; recording a sentence again replaces it."""
+    profile = resolve_profile(profile_id)
+    require_unlocked(profile, token, "guided_record")          # the PIN check comes first
     if file is None:
         raise ProfileError("No audio file was sent.")
-    profile = resolve_profile(profile_id)
     extension = os.path.splitext(file.filename or "")[1] or ".webm"
     return store.save_guided(profile["id"], sentence_id, await file.read(), extension, duration_s)
 
 
 @app.post("/guided/skip")
-async def guided_skip(sentence_id: str = Form(...), profile_id: str = Form("")):
-    return store.skip_guided(resolve_profile(profile_id)["id"], sentence_id)
+async def guided_skip(sentence_id: str = Form(...), profile_id: str = Form(""), token: str = Header("", alias=TOKEN_HEADER)):
+    profile = resolve_profile(profile_id)
+    require_unlocked(profile, token, "guided_skip")
+    return store.skip_guided(profile["id"], sentence_id)
 
 
 @app.get("/guided/audio/{sentence_id}")
-async def guided_audio(sentence_id: str, profile_id: str = ""):
+async def guided_audio(sentence_id: str, profile_id: str = "", token: str = Header("", alias=TOKEN_HEADER)):
     """Plays back a saved guided recording."""
-    path = store.guided_audio_path(resolve_profile(profile_id)["id"], sentence_id)
+    profile = resolve_profile(profile_id)
+    require_unlocked(profile, token, "play_recording")
+    path = store.guided_audio_path(profile["id"], sentence_id)
     media = {".webm": "audio/webm", ".wav": "audio/wav", ".ogg": "audio/ogg",
              ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}.get(path.suffix.lower(), "application/octet-stream")
     return FileResponse(path, media_type=media, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/guided/references")
-async def guided_use_as_references(profile_id: str = Form("")):
+async def guided_use_as_references(profile_id: str = Form(""), token: str = Header("", alias=TOKEN_HEADER)):
     """Uses the best guided recordings as voice references."""
-    pid = resolve_profile(profile_id)["id"]
+    profile = resolve_profile(profile_id)
+    require_unlocked(profile, token, "guided_use_references")
+    pid = profile["id"]
     store.pick_references(pid)
     return store.guided_status(pid)
 
 
 @app.delete("/guided/references")
-async def guided_clear_references(profile_id: str = ""):
-    pid = resolve_profile(profile_id)["id"]
+async def guided_clear_references(profile_id: str = "", token: str = Header("", alias=TOKEN_HEADER)):
+    profile = resolve_profile(profile_id)
+    require_unlocked(profile, token, "guided_clear_references")
+    pid = profile["id"]
     store.clear_references(pid)
     return store.guided_status(pid)
 
 
 # Uploaded old recordings: the browser decodes and trims them and sends a mono WAV.
 @app.get("/uploads")
-async def list_uploads(profile_id: str = ""):
-    return store.list_uploads(resolve_profile(profile_id)["id"])
+async def list_uploads(profile_id: str = "", token: str = Header("", alias=TOKEN_HEADER)):
+    profile = resolve_profile(profile_id)
+    require_unlocked(profile, token, "list_uploads")
+    return store.list_uploads(profile["id"])
 
 
 @app.post("/uploads")
 async def upload_recording(file: UploadFile = None, profile_id: str = Form(""),
                            original_name: str = Form(""), start_s: float = Form(...),
                            end_s: float = Form(...), speech_s: float = Form(0.0),
-                           consent: bool = Form(False), consented_by: str = Form("")):
+                           consent: bool = Form(False), consented_by: str = Form(""), token: str = Header("", alias=TOKEN_HEADER)):
     """Saves one trimmed clip (validated in profiles.add_upload) and returns the updated list."""
+    profile = resolve_profile(profile_id)
+    require_unlocked(profile, token, "upload_recording")          # the PIN check comes first
     if file is None:
         raise ProfileError("No audio file was sent.")
-    pid = resolve_profile(profile_id)["id"]
+    pid = profile["id"]
     data = await file.read(MAX_UPLOAD_BYTES + 1)     # never read more than the limit + 1 byte
     clip = store.add_upload(pid, data, original_name=original_name, start_s=start_s, end_s=end_s,
                             speech_s=speech_s, consent=consent, consented_by=consented_by)
@@ -331,13 +452,16 @@ async def upload_recording(file: UploadFile = None, profile_id: str = Form(""),
 
 
 @app.delete("/uploads/{clip_id}")
-async def delete_uploaded_recording(clip_id: str, profile_id: str = ""):
-    return store.delete_upload(resolve_profile(profile_id)["id"], clip_id)
+async def delete_uploaded_recording(clip_id: str, profile_id: str = "", token: str = Header("", alias=TOKEN_HEADER)):
+    profile = resolve_profile(profile_id)
+    require_unlocked(profile, token, "delete_upload")
+    return store.delete_upload(profile["id"], clip_id)
 
 
 @app.get("/profiles/{profile_id}/export")
-async def export_dataset(profile_id: str):
+async def export_dataset(profile_id: str, token: str = Header("", alias=TOKEN_HEADER)):
     """Downloads the user's guided recordings as an LJSpeech-style zip."""
+    require_unlocked(store.get(profile_id), token, "export_dataset")
     data = build_dataset_zip(store, profile_id)
     return Response(
         content=data,

@@ -195,8 +195,21 @@ class ProfileStore:
         profile = json.loads((folder / "profile.json").read_text(encoding="utf-8"))
         profile.setdefault("voice_reference", "auto")     # older profiles don't have it
         profile.setdefault("reference_clip", "")          # one chosen upload id; "" = all uploads
+        # the caregiver PIN's hash never leaves the server: callers only learn whether one is set
+        profile["pin_set"] = bool(profile.pop("pin", None))
         profile["clip_counts"] = self.clip_counts(profile_id)
         return profile
+
+    # Caregiver PIN (caregiver_pin.py): only the salted hash record is stored, never the PIN
+    def pin_record(self, profile_id: str):
+        path = self._folder(profile_id) / "profile.json"
+        return json.loads(path.read_text(encoding="utf-8")).get("pin")
+
+    def set_pin_record(self, profile_id: str, record: dict):
+        path = self._folder(profile_id) / "profile.json"
+        profile = json.loads(path.read_text(encoding="utf-8"))
+        profile["pin"] = record
+        path.write_text(json.dumps(profile, indent=2), encoding="utf-8")
 
     def set_voice_reference(self, profile_id: str, mode: str, clip_id: str = "") -> dict:
         """Sets which recordings /speak copies the voice from (see REFERENCE_MODES).
