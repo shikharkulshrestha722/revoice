@@ -16,7 +16,7 @@
 
 // ===================== SETTINGS =====================
 #define TOUCH_TEST        1   // no sensors yet: touch a wire on GPIO 4 (SELECT) / GPIO 15 (NEXT)
-#define DIGITAL_PROXIMITY 2   // FC-51 / E18-D80NK style: OUT goes LOW when near. GPIO 27 / GPIO 26
+#define DIGITAL_PROXIMITY 2   // FC-51 / E18-D80NK style: OUT goes LOW when near. GPIO 18 / GPIO 19
 #define ANALOG_TCRT5000   3   // analog OUT: GPIO 34 / GPIO 35 (ADC1, 0-4095)
 const int MODE = TOUCH_TEST;
 const bool TWO_SWITCH = true;               // false = one sensor (SELECT only): 1-switch auto-scan
@@ -31,7 +31,7 @@ const unsigned long DEBOUNCE_MS = 30;
 const unsigned long REFRACTORY_MS = 300;
 
 const int SELECT_TOUCH = 4, NEXT_TOUCH = 15;        // TOUCH_TEST (T0, T3)
-const int SELECT_DIGITAL = 27, NEXT_DIGITAL = 26;   // DIGITAL_PROXIMITY
+const int SELECT_DIGITAL = 18, NEXT_DIGITAL = 19;   // DIGITAL_PROXIMITY
 const int SELECT_ANALOG = 34, NEXT_ANALOG = 35;     // ANALOG_TCRT5000 (ADC1 works while Bluetooth is on)
 const int LED_PIN = 2;                              // built-in LED: on = connected, blinking = waiting
 

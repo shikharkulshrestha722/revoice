@@ -57,7 +57,7 @@ must not measure 5 V); otherwise use FC-51 modules with the ESP32.
 | Mode | SELECT | NEXT |
 |---|---|---|
 | `TOUCH_TEST` (no sensors yet: touch a bare wire) | GPIO **4** | GPIO **15** |
-| `DIGITAL_PROXIMITY` | GPIO **27** | GPIO **26** |
+| `DIGITAL_PROXIMITY` | GPIO **18** | GPIO **19** |
 | `ANALOG_TCRT5000` (ADC1 only: ADC2 stops working while Bluetooth is on) | GPIO **34** | GPIO **35** |
 
 The built-in LED (GPIO 2) blinks while waiting for Bluetooth and stays on once connected.
@@ -177,13 +177,13 @@ Arduino IDE instead: add `#define USE_NIMBLE` as the first line of the library's
 
 1. Check the modules: power one from 5V (Uno) with nothing connected to OUT; its power LED is
    on, and the detect LED lights when a hand is 2–5 cm away. Note which pin is OUT.
-2. Wire SELECT only (pin 2 / GPIO 27). Upload the sketch with `TWO_SWITCH = false`,
+2. Wire SELECT only (pin 2 / GPIO 18). Upload the sketch with `TWO_SWITCH = false`,
    `SENSOR_TYPE`/`MODE = DIGITAL_PROXIMITY`.
 3. `py -3.10 tools/ir_calibrate.py --one-switch`: turn the potentiometer until NEAR shows only
    for a deliberate movement; 10 deliberate presses = 10 counted, 1 minute of rest = 0.
 4. Build the mount (wristband or glasses), then repeat step 3 **on the person**, in the room
    where it will be used. Adjust `MIN_HOLD_MS` if brushes count or real presses are missed.
-5. Wristband: wire NEXT (pin 3 / GPIO 26), `TWO_SWITCH = true`, run `ir_calibrate.py` again and
+5. Wristband: wire NEXT (pin 3 / GPIO 19), `TWO_SWITCH = true`, run `ir_calibrate.py` again and
    check the two fingers don't trigger each other.
 6. `py -3.10 tools/ir_calibrate.py --save` (or `switch_upload.py`) to put the real sketch on the board.
 7. ReVoice: **Input → Scanning**, **Switches: 1 or 2** to match. Spell a short word, pick a

@@ -108,7 +108,7 @@ def test_esp32_sketch_keyboard_pins_and_modes():
     assert 'BleKeyboard bleKeyboard("ReVoice Switch"' in ESP32
     assert "{\"DOWN\", \"UP\", ' '}" in ESP32 and '"NEXT_DOWN", "NEXT_UP", KEY_RETURN' in ESP32   # Space / Enter
     assert "if (bleKeyboard.isConnected()) bleKeyboard.write(s.key)" in ESP32                      # only when connected
-    for pins in ("SELECT_TOUCH = 4, NEXT_TOUCH = 15", "SELECT_DIGITAL = 27, NEXT_DIGITAL = 26",
+    for pins in ("SELECT_TOUCH = 4, NEXT_TOUCH = 15", "SELECT_DIGITAL = 18, NEXT_DIGITAL = 19",
                  "SELECT_ANALOG = 34, NEXT_ANALOG = 35"):
         assert pins in ESP32
     for mode in ("TOUCH_TEST", "DIGITAL_PROXIMITY", "ANALOG_TCRT5000"):
