@@ -186,14 +186,36 @@
           <option value="f5" selected>F5-TTS</option>
           <option value="xtts">XTTS-v2</option>
           <option value="both">Compare both</option>
+          <option value="indicf5">IndicF5 (Indian languages)</option>
+          <option value="compare_indic">Compare IndicF5 vs F5 (Indian language)</option>
         </select>
         <button id="speakBtn" class="primary speak-btn">Generate &amp; Speak</button>
         <!-- caregiver: the exact sentence of Colab's Step 4b test, for a fair comparison -->
         <button id="testSentenceBtn" title="Speaks the Colab Step 4b test sentence (neutral emotion)">Test sentence</button>
       </div>
+      <!-- IndicF5 only (caregiver settings): the language, and how the typed English becomes it.
+           Predictions stay English; the sentence is converted just before speaking. -->
+      <div id="indicOptions" class="controls-row indic-options" hidden>
+        <label for="indicLanguage">Language:</label>
+        <select id="indicLanguage"></select>
+        <fieldset class="text-mode">
+          <legend>Typed text is</legend>
+          <label><input type="radio" name="textMode" value="transliterate" checked />
+            the language in English letters <span class="example">(main paani chahta hoon)</span></label>
+          <label><input type="radio" name="textMode" value="translate" />
+            English, translate it <span class="example">(I need water)</span></label>
+        </fieldset>
+      </div>
+      <p id="indicNote" class="hint" hidden></p>
       <!-- caregiver setting: accent estimates are rough, so they're hidden unless asked for -->
       <div class="controls-row">
         <label><input type="checkbox" id="showAccent" /> Show accent estimates</label>
+      </div>
+
+      <!-- IndicF5: the sentence in the language's script, exactly as it was spoken -->
+      <div id="convertedBox" class="converted" hidden>
+        <div id="convertedLabel" class="converted-label"></div>
+        <p id="convertedText" class="converted-text"></p>
       </div>
 
       <!-- single engine: one player -->
@@ -202,8 +224,16 @@
       <div id="refUsedSingle" class="ref-used" hidden></div>
       <div id="metricsSingle" class="metrics" hidden></div>
 
-      <!-- "Compare both": one labelled player per engine -->
+      <!-- "Compare both" / "Compare IndicF5 vs F5": one labelled player per engine -->
       <div id="compareBox" class="compare-box" hidden>
+        <div id="itemIndic" class="compare-item" hidden>
+          <strong>IndicF5</strong> <span id="timeIndic" class="compare-time"></span>
+          <span id="badgeIndic" class="winner-badge" hidden>&#9733; more similar voice</span>
+          <audio id="audioIndic" controls></audio>
+          <p id="refTextIndic" class="ref-text" hidden></p>
+          <div id="metricsIndic" class="metrics" hidden></div>
+          <div id="refUsedIndic" class="ref-used" hidden></div>
+        </div>
         <div id="itemXtts" class="compare-item">
           <strong>XTTS-v2</strong> <span id="timeXtts" class="compare-time"></span>
           <span id="badgeXtts" class="winner-badge" hidden>&#9733; more similar voice</span>

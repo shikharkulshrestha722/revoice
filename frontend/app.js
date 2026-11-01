@@ -10,6 +10,8 @@ import { Scanner, buildScanRows, applyScanSelection, normalizeScanSettings, SCAN
          parseSwitchMessage, switchPillText, scanSpaceAction, isTextEntry } from "./scanning.js";
 import { mixToMono, convertForUpload, waveformPeaks, speechChunks, speechSecondsInRange,
          hasAllowedExtension } from "./audio_prep.js";
+import { usesIndianLanguage, compareEngines, previewEngine, generatingMessage,
+         convertedLabel } from "./indic.js";
 
 // MediaPipe loads on first use of Finger mode, so a failed download can't break the camera.
 const MEDIAPIPE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
@@ -606,6 +608,7 @@ const scan = {
   active: false,
   userPaused: false,      // the Pause button
   speechPaused: false,    // automatic, from SPEAK until the audio has finished
+  progressText: "",       // e.g. "Generating in Hindi… about 15 s", shown while paused for speech
   timer: null,
   settings: loadScanSettings(),
   clickCtx: null,         // AudioContext for the optional click sound
@@ -658,7 +661,7 @@ function renderScan() {
   });
   scanEl("scanGrid").classList.toggle("paused", view.paused);
   scanEl("scanState").textContent =
-    view.paused ? (scan.speechPaused && !scan.userPaused ? "Paused while speaking…" : "Paused")
+    view.paused ? (scan.speechPaused && !scan.userPaused ? scan.progressText || "Paused while speaking…" : "Paused")
     : view.phase === "waiting" ? "Get ready…"
     : view.phase === "rows" ? "Press on the row you want"
     : view.phase === "cols" ? "Press on the letter you want" : "";
@@ -946,6 +949,7 @@ function applyProfileToVoiceControls() {
   if (isStock) engineEl.value = "xtts";
   else if (engineEl.dataset.forcedForStock) engineEl.value = "f5";   // back to the default
   engineEl.dataset.forcedForStock = isStock ? "yes" : "";
+  updateIndicOptions();
 
   document.getElementById("voiceReference").value = activeProfile?.voice_reference || "auto";
   if (isStock) document.getElementById("voiceRefPreview").hidden = true;
@@ -1120,7 +1124,7 @@ async function updateVoiceBankStatus() {
     const preview = (engine) => fetch(`/voice_bank/references?profile_id=${pid}` +
       `&emotion=${encodeURIComponent(emotion)}&engine=${engine}`).then((r) => r.json());
     const chosen = document.getElementById("engine").value;
-    const first = chosen === "both" ? "f5" : chosen;
+    const first = previewEngine(chosen);
     showRefUsed(document.getElementById("voiceRefPreview"), await preview(first),
                 `Next ${ENGINE_NAMES[first]} generation: `);
     const xttsEl = document.getElementById("voiceRefPreviewXtts");
@@ -1250,8 +1254,81 @@ document.getElementById("recordBtn").onclick = async () => {
 };
 
 // Speak
-const ENGINE_NAMES = { xtts: "XTTS-v2", f5: "F5-TTS" };
+const ENGINE_NAMES = { xtts: "XTTS-v2", f5: "F5-TTS", indicf5: "IndicF5" };
 let speaking = false;   // stops a second click starting another generation
+
+// IndicF5 (Indian languages): caregiver settings, remembered per browser. The list of
+// languages comes from the backend (names, not codes).
+const INDIC_SETTINGS_KEY = "revoice.indic";
+const indic = { languages: [], gemini: false, firstRequest: true };
+const indicLanguageEl = document.getElementById("indicLanguage");
+
+async function loadIndicLanguages() {
+  try {
+    const data = await (await fetch("/indic/languages")).json();
+    indic.languages = data.languages || [];
+    indic.gemini = Boolean(data.gemini);
+  } catch { indic.languages = []; }
+  indicLanguageEl.replaceChildren(...indic.languages.map((lang) => new Option(lang.name, lang.code)));
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(INDIC_SETTINGS_KEY)) || {}; } catch { /* defaults */ }
+  indicLanguageEl.value = indic.languages.some((lang) => lang.code === saved.language) ? saved.language : "hi";
+  const mode = saved.mode === "translate" ? "translate" : "transliterate";
+  document.querySelector(`input[name="textMode"][value="${mode}"]`).checked = true;
+  updateIndicOptions();
+}
+
+function chosenTextMode() {
+  return document.querySelector('input[name="textMode"]:checked')?.value || "transliterate";
+}
+
+function chosenLanguage() {
+  const code = indicLanguageEl.value;
+  return indic.languages.find((lang) => lang.code === code) || { code, name: code, script: "" };
+}
+
+function saveIndicSettings() {
+  try {
+    localStorage.setItem(INDIC_SETTINGS_KEY, JSON.stringify({ language: indicLanguageEl.value, mode: chosenTextMode() }));
+  } catch { /* not saved, still works for this visit */ }
+}
+
+// Shows the language controls only for the IndicF5 choices.
+function updateIndicOptions() {
+  const on = usesIndianLanguage(document.getElementById("engine").value);
+  document.getElementById("indicOptions").hidden = !on;
+  const note = document.getElementById("indicNote");
+  note.hidden = !on;
+  if (!on) return;
+  const lang = chosenLanguage();
+  note.textContent = indic.gemini
+    ? `Predictions stay in English. Before speaking, Gemini converts the sentence to ${lang.name} ` +
+      `(${lang.script} script); the result is shown above the player.`
+    : `No Gemini key on the server: type the sentence in ${lang.script} script ` +
+      "(English can't be converted, so it won't be spoken).";
+}
+
+document.getElementById("engine").addEventListener("change", updateIndicOptions);
+indicLanguageEl.addEventListener("change", () => { saveIndicSettings(); updateIndicOptions(); });
+for (const radio of document.querySelectorAll('input[name="textMode"]')) radio.addEventListener("change", saveIndicSettings);
+
+// The sentence in the language's script, as spoken (null hides it).
+function showConverted(language, mode, text) {
+  const box = document.getElementById("convertedBox");
+  box.hidden = !text;
+  if (!text) return;
+  document.getElementById("convertedLabel").textContent = convertedLabel(language.name, mode);
+  const textEl = document.getElementById("convertedText");
+  textEl.textContent = text;
+  textEl.lang = language.code;          // right font and screen-reader voice for the script
+}
+
+// Progress text in the Speak section, and in the scanning panel while scanning waits.
+function showProgress(text) {
+  document.getElementById("speakStatus").textContent = text;
+  scan.progressText = text;
+  if (scan.active) renderScan();
+}
 
 // Clears a player so a failed request can't leave the previous sentence's audio playing.
 function clearPlayer(audio) {
@@ -1299,13 +1376,20 @@ function showRefUsed(el, ref, prefix = "") {
   el.hidden = lines.length === 0;
 }
 
-// Speech from one engine: { audioSrc, seconds, refText, metrics, voiceReference }, or throws.
-// counted = false for the Test sentence; typed sentences send no selection count (typing isn't pointing).
-async function requestSpeech(engine, text, emotion, counted = true) {
+// Speech from one engine: { audioSrc, seconds, refText, metrics, voiceReference, convertedText,
+// textMode }, or throws. counted = false for the Test sentence; typed sentences send no selection
+// count (typing isn't pointing). indicOptions = { language, mode, convertedText } for Indian languages.
+async function requestSpeech(engine, text, emotion, counted = true, indicOptions = null) {
   const formData = new FormData();
   formData.append("text", text);
   formData.append("emotion", emotion);
   formData.append("engine", engine);
+  if (indicOptions) {
+    formData.append("language", indicOptions.language);
+    formData.append("text_mode", indicOptions.mode);
+    // Compare: F5 gets exactly the text IndicF5 spoke (not converted a second time)
+    if (indicOptions.convertedText) formData.append("converted_text", indicOptions.convertedText);
+  }
   if (activeProfile) formData.append("profile_id", activeProfile.id);
   if (counted) {
     if (!sentence.typed) formData.append("selections", sentence.selections);    // for the generation log
@@ -1323,7 +1407,8 @@ async function requestSpeech(engine, text, emotion, counted = true) {
 
   return { audioSrc: "data:audio/wav;base64," + data.audio_base64, seconds,
            refText: data.ref_text || "", metrics: data.metrics || null,
-           voiceReference: data.voice_reference || null };
+           voiceReference: data.voice_reference || null,
+           convertedText: data.converted_text || "", textMode: data.text_mode || "" };
 }
 
 // Colab Step 4b's exact sentence (a test keeps them in sync), spoken neutral for a fair comparison.
@@ -1345,10 +1430,19 @@ async function speak(text, emotion, counted) {
     return;
   }
 
+  // Indian language: the backend converts the text (Gemini) before IndicF5 speaks it
+  const language = usesIndianLanguage(engine) ? chosenLanguage() : null;
+  const indicOptions = language ? { language: language.code, mode: chosenTextMode() } : null;
+  const progressFor = (eng) => eng === "indicf5"
+    ? generatingMessage(language.name, text, indic.firstRequest)
+    : language ? `Generating with ${ENGINE_NAMES[eng]} (same ${language.name} text)...`
+    : `Generating speech with ${ENGINE_NAMES[eng]}...`;
+  showConverted(null);
+
   speaking = true;
   document.getElementById("speakBusy").hidden = false;    // animated "generating" dots
   try {
-    if (engine !== "both") {
+    if (!compareEngines(engine)) {
       // one engine
       compareBox.hidden = true;
       singleAudio.hidden = false;
@@ -1359,9 +1453,12 @@ async function speak(text, emotion, counted) {
       showRefText(refTextEl, "");
       showMetrics(metricsEl, null);
       showRefUsed(refUsedEl, null);
-      statusEl.textContent = `Generating speech with ${ENGINE_NAMES[engine]}...`;
+      showProgress(progressFor(engine));
       try {
-        const { audioSrc, seconds, refText, metrics, voiceReference } = await requestSpeech(engine, text, emotion, counted);
+        const { audioSrc, seconds, refText, metrics, voiceReference, convertedText, textMode } =
+          await requestSpeech(engine, text, emotion, counted, indicOptions);
+        if (engine === "indicf5") indic.firstRequest = false;
+        if (language) showConverted(language, textMode, convertedText);
         singleAudio.src = audioSrc;
         singleAudio.play();
         showRefText(refTextEl, refText);
@@ -1375,8 +1472,12 @@ async function speak(text, emotion, counted) {
       return;
     }
 
-    // Compare: XTTS then F5, one at a time, since they share one GPU (keeps timings fair)
+    // Compare: one engine after the other, since they share one GPU (keeps timings fair)
+    const engines = compareEngines(engine);
     clearPlayer(singleAudio);
+    showRefText(document.getElementById("refTextSingle"), "");     // the single player's old results
+    showMetrics(document.getElementById("metricsSingle"), null);
+    showRefUsed(document.getElementById("refUsedSingle"), null);
     singleAudio.hidden = true;
     compareBox.hidden = false;
     const player = (id) => ({
@@ -1385,7 +1486,8 @@ async function speak(text, emotion, counted) {
       refUsed: document.getElementById("refUsed" + id),
       badge: document.getElementById("badge" + id),
     });
-    const players = { xtts: player("Xtts"), f5: player("F5") };
+    const players = { xtts: player("Xtts"), f5: player("F5"), indicf5: player("Indic") };
+    for (const [eng, p] of Object.entries(players)) p.item.hidden = !engines.includes(eng);
     for (const p of Object.values(players)) {
       clearPlayer(p.audio);
       showMetrics(p.metrics, null);
@@ -1395,18 +1497,25 @@ async function speak(text, emotion, counted) {
       p.time.textContent = "waiting...";
     }
     const metricsByEngine = {};
-    const refTextF5 = document.getElementById("refTextF5");
-    showRefText(refTextF5, "");
+    const refTextEls = { f5: document.getElementById("refTextF5"), indicf5: document.getElementById("refTextIndic") };
+    for (const el of Object.values(refTextEls)) showRefText(el, "");
 
     const report = [];
-    for (const eng of ["xtts", "f5"]) {
-      statusEl.textContent = `Generating with ${ENGINE_NAMES[eng]}...`;
+    for (const eng of engines) {
+      showProgress(progressFor(eng));
       players[eng].time.textContent = "generating...";
       try {
-        const { audioSrc, seconds, refText, metrics, voiceReference } = await requestSpeech(eng, text, emotion, counted);
+        const { audioSrc, seconds, refText, metrics, voiceReference, convertedText, textMode } =
+          await requestSpeech(eng, text, emotion, counted, indicOptions);
+        if (eng === "indicf5") {
+          indic.firstRequest = false;
+          showConverted(language, textMode, convertedText);
+          // F5 then gets exactly this text, so both speak the same sentence
+          Object.assign(indicOptions, { convertedText, mode: textMode || indicOptions.mode });
+        }
         players[eng].audio.src = audioSrc;
         players[eng].time.textContent = `took ${seconds.toFixed(1)}s`;
-        if (eng === "f5") showRefText(refTextF5, refText);
+        if (refTextEls[eng]) showRefText(refTextEls[eng], refText);
         showMetrics(players[eng].metrics, metrics);
         showRefUsed(players[eng].refUsed, voiceReference);
         metricsByEngine[eng] = metrics;
@@ -1429,6 +1538,8 @@ async function speak(text, emotion, counted) {
   } finally {
     speaking = false;
     document.getElementById("speakBusy").hidden = true;
+    scan.progressText = "";
+    if (scan.active) renderScan();
   }
 }
 
@@ -2034,4 +2145,5 @@ function showSavedUploads(data) {
 // Start: runs last, so everything above is defined.
 loadProfiles();
 updateSelectionStats();
+loadIndicLanguages();
 setScanningMode(trackModeEl.value === "scanning");   // the browser may restore the last mode on reload

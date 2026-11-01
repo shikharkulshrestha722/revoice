@@ -536,6 +536,34 @@ audio {
   margin-left: var(--space-2);
 }
 
+/* IndicF5: language and "typed text is" choice (caregiver settings) */
+.text-mode {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+}
+.text-mode legend { font-size: var(--text-sm); color: var(--text-muted); padding: 0 var(--space-1); }
+.text-mode label { display: block; margin: var(--space-1) 0; }
+.text-mode .example { color: var(--text-muted); font-size: var(--text-sm); }
+
+/* the sentence in the language's script, as it was spoken (above the player) */
+.converted {
+  background: var(--surface-2);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+}
+.converted-label { font-size: var(--text-sm); color: var(--text-muted); }
+.converted-text {
+  font-size: 22px;            /* large: Indian scripts have small vowel signs */
+  line-height: 1.6;
+  color: var(--text);
+  margin: var(--space-1) 0 0;
+  overflow-wrap: anywhere;
+}
+
 .ref-text {
   font-size: 12px;
   font-style: italic;
