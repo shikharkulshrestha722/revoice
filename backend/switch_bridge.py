@@ -1,4 +1,6 @@
-"""Single-switch bridge: reads "DOWN"/"UP" lines from the Arduino (EMG sensor) over USB serial.
+"""Switch bridge: reads switch lines from the Arduino over USB serial. "DOWN"/"UP" = the SELECT
+switch (EMG sensor or IR sensor); "NEXT_DOWN"/"NEXT_UP" = the second (NEXT) switch, used for
+2-switch step scanning (hardware/switch_ir).
 
 Only ONE program can open a COM port at a time, so the whole server shares one reader thread
 (started by app.py when SWITCH_SERIAL_PORT is set). Every event is passed to the listeners;
@@ -14,14 +16,16 @@ try:
 except ImportError:                    # the server still runs (spacebar only) without pyserial
     serial = None
 
-VALID_STATES = ("DOWN", "UP")
-DEBOUNCE_S = 0.3        # a new DOWN within 300 ms of the last one is a bounce, not a press
+VALID_STATES = ("DOWN", "UP", "NEXT_DOWN", "NEXT_UP")
+# Each switch is debounced on its own, so a NEXT press can never hide a SELECT press.
+SWITCH_OF = {"DOWN": "select", "UP": "select", "NEXT_DOWN": "next", "NEXT_UP": "next"}
+DEBOUNCE_S = 0.3        # a new DOWN within 300 ms of that switch's last one is a bounce, not a press
 RETRY_S = 3.0           # wait between attempts to open a missing or busy port
 READ_TIMEOUT_S = 0.5    # readline gives up after this, so stop() is noticed quickly
 
 
 def parse_line(raw) -> str | None:
-    """b"DOWN\\r\\n" -> "DOWN". Anything else (noise, start-up text) -> None."""
+    """b"DOWN\\r\\n" -> "DOWN", b"NEXT_DOWN" -> "NEXT_DOWN". Anything else (noise, start-up text) -> None."""
     if isinstance(raw, bytes):
         raw = raw.decode("ascii", errors="ignore")
     text = (raw or "").strip().upper()
@@ -49,8 +53,8 @@ class SwitchBridge:
         self.error = ""
         self.last_event = None
         self.last_event_time = None
-        self._last_down = None              # clock() of the last accepted DOWN
-        self._skip_next_up = False          # the UP that belongs to an ignored DOWN
+        self._last_down = {}                # switch -> clock() of its last accepted DOWN
+        self._skip_next_up = set()          # switches whose next UP belongs to an ignored DOWN
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
@@ -66,16 +70,19 @@ class SwitchBridge:
                 "last_event_time": self.last_event_time}
 
     def handle_state(self, state: str) -> dict | None:
-        """Debounces one DOWN/UP and tells the listeners. Returns the event, or None if ignored."""
+        """Debounces one DOWN/UP (or NEXT_DOWN/NEXT_UP) and tells the listeners.
+        Returns the event, or None if ignored."""
         with self._lock:                    # the reader thread and /switch/simulate can both call this
             now = self.clock()
-            if state == "DOWN":
-                if self._last_down is not None and now - self._last_down < self.debounce_s:
-                    self._skip_next_up = True
+            which = SWITCH_OF[state]
+            if state.endswith("DOWN"):
+                last = self._last_down.get(which)
+                if last is not None and now - last < self.debounce_s:
+                    self._skip_next_up.add(which)
                     return None
-                self._last_down = now
-            elif state == "UP" and self._skip_next_up:
-                self._skip_next_up = False
+                self._last_down[which] = now
+            elif which in self._skip_next_up:
+                self._skip_next_up.discard(which)
                 return None
             event = {"state": state, "t": time.time()}
             self.last_event, self.last_event_time = state, event["t"]

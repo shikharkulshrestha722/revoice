@@ -582,7 +582,7 @@ async def switch_simulate(body: SimulatedSwitch):
     """A fake switch event (tests and demos without hardware); debounced like the real one."""
     state = body.state.strip().upper()
     if state not in VALID_STATES:
-        return JSONResponse({"error": "state must be DOWN or UP"}, status_code=400)
+        return JSONResponse({"error": f"state must be one of {', '.join(VALID_STATES)}"}, status_code=400)
     event = switch.handle_state(state)
     return {"accepted": event is not None, "event": event}
 

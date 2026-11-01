@@ -1,7 +1,8 @@
 """Finger twitch -> Space key. The simplest way to use the EMG switch with ReVoice.
 
 Reads "DOWN"/"UP" from the Arduino and presses Space (pyautogui) on every DOWN, so ReVoice's
-scanning mode sees an ordinary spacebar press. Leave SWITCH_SERIAL_PORT EMPTY in backend/.env
+scanning mode sees an ordinary spacebar press. A second switch (hardware/switch_ir with
+TWO_SWITCH) sends "NEXT_DOWN": that presses Enter (= NEXT in 2-switch step scanning). Leave SWITCH_SERIAL_PORT EMPTY in backend/.env
 when using this: only one program can open the COM port.
 
     cd backend
@@ -30,19 +31,42 @@ def press_space():
     pyautogui.press("space")
 
 
-class TwitchToSpace:
-    """DOWN -> Space, except DOWNs inside the lockout after the last accepted one (muscle bounce)."""
+def press_enter():
+    import pyautogui
+    pyautogui.press("enter")
 
-    def __init__(self, lockout=0.4, press=press_space, clock=time.monotonic, log=print):
+
+class TwitchToSpace:
+    """DOWN -> Space, except DOWNs inside the lockout after the last accepted one (muscle bounce).
+    NEXT_DOWN -> Enter, with its own lockout (two switches never block each other)."""
+
+    def __init__(self, lockout=0.4, press=press_space, clock=time.monotonic, log=print,
+                 press_next=press_enter):
         self.lockout = lockout
         self.press = press
+        self.press_next = press_next
         self.clock = clock
         self.log = log
         self.last_press = None
+        self.last_next = None
         self.presses = 0
+        self.next_presses = 0
+
+    def handle_next(self):
+        """Returns True if Enter was pressed."""
+        now = self.clock()
+        if self.last_next is not None and now - self.last_next < self.lockout:
+            return False
+        self.last_next = now
+        self.press_next()
+        self.next_presses += 1
+        self.log(f"NEXT {self.next_presses} -> Enter  [{time.strftime('%H:%M:%S')}]")
+        return True
 
     def handle_state(self, state):
-        """Returns True if Space was pressed."""
+        """Returns True if Space (DOWN) or Enter (NEXT_DOWN) was pressed."""
+        if state == "NEXT_DOWN":
+            return self.handle_next()
         if state != "DOWN":
             return False
         now = self.clock()
