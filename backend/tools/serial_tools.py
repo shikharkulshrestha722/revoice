@@ -15,6 +15,12 @@ import serial.tools.list_ports
 FQBN = "arduino:avr:uno"
 HARDWARE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "hardware")
 SWITCH_SKETCH = os.path.abspath(os.path.join(HARDWARE_DIR, "switch_emg.ino"))
+IR_SKETCH_DIR = os.path.abspath(os.path.join(HARDWARE_DIR, "switch_ir"))            # Uno, wired
+IR_SKETCH = os.path.join(IR_SKETCH_DIR, "switch_ir.ino")
+ESP32_SKETCH_DIR = os.path.abspath(os.path.join(HARDWARE_DIR, "switch_esp32_ble"))  # wireless
+ESP32_FQBN = "esp32:esp32:esp32"
+# The T-vK BLE Keyboard library compiles on ESP32 core 3.x only with its NimBLE option.
+ESP32_BUILD_PROPERTIES = ["compiler.cpp.extra_flags=-DUSE_NIMBLE"]
 
 # USB ids of genuine Arduinos and the CH340 chip used by most Uno clones
 ARDUINO_VIDS = {0x2341, 0x2A03, 0x1A86}
@@ -99,15 +105,16 @@ def run_cli(args, run=subprocess.run):
     return result.stdout
 
 
-def compile_sketch(folder, run=subprocess.run):
-    return run_cli(["compile", "--fqbn", FQBN, folder], run)
+def compile_sketch(folder, run=subprocess.run, fqbn=FQBN, build_properties=()):
+    extra = [arg for prop in build_properties for arg in ("--build-property", prop)]
+    return run_cli(["compile", "--fqbn", fqbn, *extra, folder], run)
 
 
-def upload_sketch(folder, port, run=subprocess.run):
+def upload_sketch(folder, port, run=subprocess.run, fqbn=FQBN, build_properties=()):
     """Compiles then uploads. Upload fails if anything else has the port open."""
-    compile_sketch(folder, run)
+    compile_sketch(folder, run, fqbn, build_properties)
     try:
-        return run_cli(["upload", "-p", port, "--fqbn", FQBN, folder], run)
+        return run_cli(["upload", "-p", port, "--fqbn", fqbn, folder], run)
     except PortError as e:
         raise PortError(f"{e}\n\nIf it says the port is busy or access is denied: "
                         + port_error_message(port, "PermissionError").split(" (")[0]) from e
