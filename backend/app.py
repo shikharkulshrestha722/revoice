@@ -20,6 +20,8 @@ from guided_sentences import GUIDED_SENTENCES, SESSION_SIZE
 from dataset_export import build_dataset_zip
 from generation_log import log_generation, summarize
 from switch_bridge import SwitchBridge, SwitchHub, VALID_STATES
+from indic_languages import (LANGUAGES, TEXT_MODES, ConversionError, convert_text, finish_indic_text,
+                             in_target_script, language_list)
 
 # Settings come from backend/.env (kept out of git); real environment variables win.
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -75,7 +77,7 @@ def call_colab(method: str, path: str, **kwargs):
 
 # Page files are sent with no-cache so the browser never runs a stale app.js.
 API_PATHS = ("/predict", "/speak", "/upload_voice_clip", "/voice_bank",
-             "/profiles", "/stock_speakers", "/guided", "/stats", "/uploads", "/switch", "/ws")
+             "/profiles", "/stock_speakers", "/guided", "/stats", "/uploads", "/switch", "/ws", "/indic")
 
 
 @app.middleware("http")
@@ -86,7 +88,7 @@ async def no_cache_for_frontend(request: Request, call_next):
     return response
 
 
-def call_gemini(prompt: str) -> str:
+def call_gemini(prompt: str, max_tokens: int = 200, timeout: float = 8, temperature: float = 0.4) -> str:
     """Sends the prompt to Gemini and returns the raw text reply."""
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -94,13 +96,13 @@ def call_gemini(prompt: str) -> str:
     )
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 200},
+        "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
     }
     r = requests.post(
         url,
         json=body,
         headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
-        timeout=8,
+        timeout=timeout,
     )
     r.raise_for_status()
     data = r.json()
@@ -129,12 +131,26 @@ def prepare_text_for_speech(text: str, emotion: str = "neutral") -> str:
 
 # Endpoints that wait for Colab or Gemini are plain `def`: FastAPI runs them on a worker
 # thread, so a long generation doesn't block other requests such as predictions.
+def gemini_key_is_set() -> bool:
+    return bool(GEMINI_API_KEY) and not GEMINI_API_KEY.startswith("PASTE_")
+
+
 @app.post("/predict")
 def predict(text: str = Form("")):
     """Suggests 3 likely sentences for the text so far."""
-    key_is_set = bool(GEMINI_API_KEY) and not GEMINI_API_KEY.startswith("PASTE_")
-    result = get_suggestions(text, call_gemini=call_gemini if key_is_set else None)
+    result = get_suggestions(text, call_gemini=call_gemini if gemini_key_is_set() else None)
     return result
+
+
+def convert_with_gemini(prompt: str) -> str:
+    """Gemini for text conversion: more room for Indian scripts, and no creativity."""
+    return call_gemini(prompt, max_tokens=1024, timeout=20, temperature=0)
+
+
+@app.get("/indic/languages")
+async def indic_languages():
+    """IndicF5's languages for the page (names, not codes), and whether Gemini can convert text."""
+    return {"languages": language_list(), "modes": list(TEXT_MODES), "gemini": gemini_key_is_set()}
 
 
 # Data folder can be moved with REVOICE_DATA_DIR; default is backend/data.
@@ -333,18 +349,27 @@ async def export_dataset(profile_id: str):
 INPUT_METHODS = ("pointer", "keyboard", "mixed", "scanning")     # only logged; speech is the same
 
 # Engines the Colab notebook understands.
-SUPPORTED_ENGINES = ("xtts", "f5")
+SUPPORTED_ENGINES = ("xtts", "f5", "indicf5")
+# Engines that may get Indian-language text: IndicF5, and F5 only to compare against it.
+INDIC_ENGINES = ("indicf5", "f5")
+# Seconds to wait for Colab. IndicF5 loads on its first request and takes ~15-20 s per sentence.
+COLAB_TIMEOUT = {"indicf5": 300}
+DEFAULT_COLAB_TIMEOUT = 120
 
 
 @app.post("/speak")
 def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("xtts"),
                 profile_id: str = Form(""), selections: str = Form(""), utterance_id: str = Form(""),
-                input_method: str = Form("")):
+                input_method: str = Form(""), language: str = Form("en"),
+                text_mode: str = Form("transliterate"), converted_text: str = Form("")):
     """Generates speech and logs one row per call, successful or not.
-    Typed and pointed text are spoken the same way; input_method is only logged."""
-    info = {}            # filled by generate_speech: voice_source, voice_reference, seconds
+    Typed and pointed text are spoken the same way; input_method is only logged.
+    language other than "en" (IndicF5, or F5 to compare): the text is first converted to that
+    language's script; converted_text (from an earlier reply) skips converting it again."""
+    info = {}            # filled by generate_speech: voice_source, voice_reference, seconds, language...
     try:
-        result = generate_speech(text, emotion, engine, profile_id, info)
+        result = generate_speech(text, emotion, engine, profile_id, info,
+                                 language=language, text_mode=text_mode, converted_text=converted_text)
         error = json.loads(result.body)["error"] if isinstance(result, JSONResponse) else ""
     except Exception as e:                # logged here, then raised to the normal error handler
         result, error = e, str(e)
@@ -359,25 +384,54 @@ def speak(text: str = Form(...), emotion: str = Form(...), engine: str = Form("x
         input_method=input_method if input_method in INPUT_METHODS else "",
         synth_seconds=reply.get("synth_seconds"), metrics=reply.get("metrics"),
         voice_reference=info.get("voice_reference"), ref_text=reply.get("ref_text"),
+        language=info.get("language", "en"), text_mode=info.get("text_mode", ""),
+        converted_text=info.get("converted_text", ""),
     )
     if isinstance(result, Exception):
         raise result
     return result
 
 
-def generate_speech(text, emotion, engine, profile_id, info):
+def generate_speech(text, emotion, engine, profile_id, info,
+                    language="en", text_mode="transliterate", converted_text=""):
     """Finds the user's voice (recordings or stock voice) and asks Colab to speak the text."""
     if engine not in SUPPORTED_ENGINES:
         return JSONResponse(
             {"error": f"Unknown engine '{engine}'. Use one of: {', '.join(SUPPORTED_ENGINES)}."},
             status_code=400,
         )
+    language = (language or "en").strip().lower()
+    info["language"] = language
+    if engine == "indicf5" and language == "en":
+        return JSONResponse({"error": "IndicF5 speaks Indian languages: choose one (e.g. Hindi)."},
+                            status_code=400)
+    if language != "en":
+        if language not in LANGUAGES:
+            return JSONResponse({"error": f"Unknown language '{language}'. "
+                                          f"Use one of: {', '.join(sorted(LANGUAGES))}."}, status_code=400)
+        if engine not in INDIC_ENGINES:
+            return JSONResponse({"error": "Indian languages work with IndicF5 (or F5-TTS, to compare)."},
+                                status_code=400)
 
     profile = resolve_profile(profile_id)
-    spoken_text = prepare_text_for_speech(text, emotion)
+    if language == "en":
+        spoken_text = prepare_text_for_speech(text, emotion)
+    else:
+        # never send English to IndicF5 as if it were Hindi: convert first, or refuse
+        if converted_text.strip() and in_target_script(converted_text, language):
+            mode = text_mode if text_mode in (*TEXT_MODES, "as_typed") else "as_typed"
+            converted = {"text": converted_text, "mode": mode}
+        else:
+            try:
+                converted = convert_text(text, language, text_mode,
+                                         call_gemini=convert_with_gemini if gemini_key_is_set() else None)
+            except ConversionError as e:
+                return JSONResponse({"error": str(e)}, status_code=400)
+        spoken_text = finish_indic_text(converted["text"], language, emotion)
+        info.update(text_mode=converted["mode"], converted_text=spoken_text)
     payload = {
         "text": spoken_text,
-        "language": "en",
+        "language": language,
         "emotion": emotion,
         "engine": engine,
     }
@@ -385,7 +439,7 @@ def generate_speech(text, emotion, engine, profile_id, info):
     if profile["voice_type"] == "stock":
         if engine != "xtts":
             return JSONResponse(
-                {"error": "Stock voices only work with XTTS-v2 (F5-TTS needs a recorded voice)."},
+                {"error": "Stock voices only work with XTTS-v2 (F5-TTS and IndicF5 need a recorded voice)."},
                 status_code=400,
             )
         payload["stock_speaker"] = profile["stock_speaker"]
@@ -407,8 +461,9 @@ def generate_speech(text, emotion, engine, profile_id, info):
 
     start = time.perf_counter()
     try:
-        # the first generation on Colab can take 20-30 seconds
-        response = call_colab("post", "/synthesize", json=payload, timeout=120)
+        # the first generation on Colab can take 20-30 seconds (IndicF5's first: it loads too)
+        response = call_colab("post", "/synthesize", json=payload,
+                              timeout=COLAB_TIMEOUT.get(engine, DEFAULT_COLAB_TIMEOUT))
     except requests.exceptions.RequestException as e:
         info["seconds"] = time.perf_counter() - start
         return JSONResponse({"error": f"Could not reach Colab API: {e}"}, status_code=502)
@@ -429,13 +484,21 @@ def generate_speech(text, emotion, engine, profile_id, info):
     reply = response.json()
     if "voice_reference" in info:          # tell the page exactly which recordings were sent
         reply["voice_reference"] = info["voice_reference"]
+    if language != "en":
+        # the page shows the text in the language's script above the player
+        reply.update(language=language, text_mode=info["text_mode"], converted_text=spoken_text)
+        # the accent model only knows English accents, so its guess for this speech means nothing
+        output = (reply.get("metrics") or {}).get("output")
+        if output:
+            output["accent_scores"] = None
+            reply["metrics"]["accent_match"] = None
     return reply
 
 
 def clips_for_engine(engine, refs):
-    """F5 copies one clip, so it gets only that one (Colab measures similarity against every clip sent);
-    XTTS uses all clips. F5's clip: first in order, or the longest recorded emotion clip."""
-    if engine != "f5" or len(refs) <= 1:
+    """F5 and IndicF5 copy one clip, so they get only that one (Colab measures similarity against every
+    clip sent); XTTS uses all clips. The clip: first in order, or the longest recorded emotion clip."""
+    if engine not in ("f5", "indicf5") or len(refs) <= 1:
         return refs
     if refs[0]["source"] == "emotion_clips":
         return [max(refs, key=lambda r: r["duration_s"] or 0)]      # ties: the oldest

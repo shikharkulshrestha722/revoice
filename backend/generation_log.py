@@ -1,5 +1,6 @@
-"""Generation log: one CSV row per /speak call (the sentence text is not stored, for privacy),
-and summarize() for /stats/summary and report.py."""
+"""Generation log: one CSV row per /speak call, and summarize() for /stats/summary and report.py.
+English sentences are not stored, for privacy. Indian-language rows (IndicF5) DO store the typed
+text and its conversion, so a wrong translation or transliteration can be checked later."""
 
 import csv
 import os
@@ -17,7 +18,8 @@ FIELDS = ["timestamp", "utterance_id", "engine", "emotion", "voice_source", "cha
           "ref_pitch_hz", "out_pitch_hz", "ref_words_per_sec", "out_words_per_sec",
           "ref_mode", "ref_files", "ref_seconds", "ref_text",
           "ref_accent_scores", "out_accent_scores",
-          "input_method"]
+          "input_method",
+          "language", "text_mode", "original_text", "converted_text"]
 
 _lock = threading.Lock()   # concurrent requests must not interleave rows
 
@@ -96,7 +98,7 @@ def _upgrade_old_file(path):
 def log_generation(path, *, text, engine, emotion, voice_source="", seconds=None,
                    success=False, error="", selections=None, utterance_id="",
                    synth_seconds=None, metrics=None, voice_reference=None, ref_text=None,
-                   input_method=""):
+                   input_method="", language="en", text_mode="", converted_text=""):
     """Appends one row, creating the file with a header if needed."""
     clean = tidy(text)
     needed = letter_by_letter_selections(clean)
@@ -118,6 +120,11 @@ def log_generation(path, *, text, engine, emotion, voice_source="", seconds=None
         **metric_columns(metrics),
         **reference_columns(voice_reference, ref_text),
         "input_method": input_method,
+        "language": language,
+        # only for Indian languages (see the top of this file); English text is never stored
+        "text_mode": text_mode if language != "en" else "",
+        "original_text": clean[:300] if language != "en" else "",
+        "converted_text": tidy(converted_text)[:300] if language != "en" else "",
     }
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with _lock:
