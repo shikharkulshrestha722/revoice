@@ -1,5 +1,7 @@
-// Single-switch row-column scanning. PURE: no DOM, no timers; the caller passes the time in,
-// so every step can be tested. app.js draws the grid and calls tick() / press().
+// Row-column scanning with 1 or 2 switches. PURE: no DOM, no timers; the caller passes the time
+// in, so every step can be tested. app.js draws the grid and calls tick() / press() / next().
+//   1 switch ("auto" mode): the light moves by itself; SELECT picks.
+//   2 switches ("step" mode): no timer; NEXT moves the light one step, SELECT picks.
 import { pointerKey, choosePrediction } from "./compose.js";
 
 // Letters by how often they appear in English (E T A O I N first), 7 per row:
@@ -20,6 +22,9 @@ export const SCAN_CONTROLS = [
 ];
 
 export const PREDICTION_COUNT = 3;
+
+// Step mode only: the last cell of every row goes back to choosing a row (a wrong row is never a trap).
+export const BACK_CELL = { kind: "back", label: "↩ ROWS" };
 
 // Row 0 = the 3 predictions (reachable first), then the letters, then the controls.
 // The shape never changes; an empty prediction is just skipped while scanning.
@@ -58,20 +63,28 @@ export function normalizeScanSettings(saved) {
     stepMs: clamp(s.stepMs, SCAN_LIMITS.stepMs),
     startDelayMs: clamp(s.startDelayMs, SCAN_LIMITS.startDelayMs),
     clickSound: s.clickSound === true,
+    switches: Number(s.switches) === 2 ? 2 : 1,      // 1 = auto-scan, 2 = step scan (NEXT + SELECT)
   };
+}
+
+// 1 switch -> "auto" (timed) scanning, 2 switches -> "step" scanning.
+export function scanModeFor(switches) {
+  return switches === 2 ? "step" : "auto";
 }
 
 // Phases:
 //   "idle"    scanning is off
 //   "waiting" after a selection (or start/resume): nothing lit, presses ignored, so the user can relax
+//             (auto mode only: in step mode nothing moves by itself, so there is nothing to wait for)
 //   "rows"    rows light up one at a time; a press picks the lit row
 //   "cols"    cells of that row light up one at a time; a press picks the lit cell.
-//             One full pass with no press -> back to "rows" (a wrong row is never a trap).
+//             Auto: one full pass with no press -> back to "rows". Step: the row ends with ↩ ROWS.
 export class Scanner {
-  constructor({ stepMs = 1000, startDelayMs = 1500, rows = buildScanRows() } = {}) {
+  constructor({ stepMs = 1000, startDelayMs = 1500, rows = buildScanRows(), mode = "auto" } = {}) {
     this.stepMs = stepMs;
     this.startDelayMs = startDelayMs;
     this.rows = rows;
+    this.mode = mode;            // "auto" (1 switch) or "step" (2 switches)
     this.phase = "idle";
     this.row = -1;
     this.col = -1;
@@ -83,6 +96,17 @@ export class Scanner {
   start(now) {
     this.picked = null;
     this._wait(now);
+  }
+
+  // 1 or 2 switches changed in the settings: start again from the top in the new mode.
+  setMode(mode, now) {
+    this.mode = mode === "step" ? "step" : "auto";
+    if (this.phase !== "idle" && !this.paused) this.start(now);
+  }
+
+  // The rows as the page draws them: in step mode every row ends with ↩ ROWS.
+  displayRows() {
+    return this.rows.map((row) => (this.mode === "step" ? [...row, BACK_CELL] : row));
   }
 
   stop() {
@@ -113,8 +137,9 @@ export class Scanner {
   }
 
   // Advances at most one step. Returns true if what is lit changed (the page redraws).
+  // Step mode never moves by itself.
   tick(now) {
-    if (this.paused || this.phase === "idle" || now < this.nextAt) return false;
+    if (this.mode === "step" || this.paused || this.phase === "idle" || now < this.nextAt) return false;
     if (this.phase === "waiting") {
       this.picked = null;
       this._toRows(this._nextRow(-1));
@@ -129,7 +154,7 @@ export class Scanner {
     return true;
   }
 
-  // The switch was pressed. Returns null (ignored), {type:"row"} or {type:"cell", cell}.
+  // SELECT was pressed. Returns null (ignored), {type:"row"}, {type:"back"} or {type:"cell", cell}.
   press(now) {
     if (this.paused || this.phase === "idle" || this.phase === "waiting") return null;
     if (this.phase === "rows") {
@@ -137,23 +162,49 @@ export class Scanner {
       if (col === -1) return null;                           // row emptied meanwhile
       this.phase = "cols";
       this.col = col;
-      this.nextAt = now + this.stepMs;
+      this.picked = null;
+      this.nextAt = this.mode === "step" ? Infinity : now + this.stepMs;
       return { type: "row", row: this.row };
     }
-    const cell = this.rows[this.row]?.[this.col];
+    const cell = this._cells(this.row)[this.col];
     if (!usable(cell)) return null;
+    if (cell.kind === "back") {                              // step mode: choose another row
+      this._toRows(this.row);
+      return { type: "back", row: this.row };
+    }
     const result = { type: "cell", row: this.row, col: this.col, cell };
     this.picked = { row: this.row, col: this.col };
     this._wait(now);
     return result;
   }
 
-  // What the page should show.
-  view() {
-    return { phase: this.phase, row: this.row, col: this.col, paused: this.paused, picked: this.picked };
+  // NEXT was pressed (step mode only): the light moves one step, wrapping round.
+  // Returns true if what is lit changed.
+  next(now) {
+    if (this.mode !== "step" || this.paused || this.phase === "idle" || this.phase === "waiting") return false;
+    this.picked = null;
+    if (this.phase === "rows") {
+      this.row = this._nextRow(this.row);
+    } else {
+      const col = this._nextCol(this.col);
+      this.col = col === -1 ? this._nextCol(-1) : col;      // after ↩ ROWS: back to the first cell
+    }
+    return true;
   }
 
+  // What the page should show.
+  view() {
+    return { phase: this.phase, row: this.row, col: this.col, paused: this.paused, picked: this.picked,
+             mode: this.mode };
+  }
+
+  // Auto: nothing lit for the start delay. Step: straight back to the first row (it doesn't move).
   _wait(now) {
+    if (this.mode === "step") {
+      this._toRows(this._nextRow(-1));
+      this.nextAt = Infinity;
+      return;
+    }
     this.phase = "waiting";
     this.row = this.col = -1;
     this.nextAt = now + this.startDelayMs;
@@ -175,19 +226,28 @@ export class Scanner {
     return -1;
   }
 
+  // cells of a row, with ↩ ROWS at the end in step mode
+  _cells(row) {
+    const cells = this.rows[row] || [];
+    return this.mode === "step" ? [...cells, BACK_CELL] : cells;
+  }
+
   // next usable cell in the current row after `from`, or -1 at the end of the pass (no wrap)
   _nextCol(from) {
-    const cells = this.rows[this.row] || [];
+    const cells = this._cells(this.row);
     for (let c = from + 1; c < cells.length; c++) if (usable(cells[c])) return c;
     return -1;
   }
 }
 
-// WebSocket message -> "DOWN" / "UP", or null for anything else.
+// WebSocket message -> "DOWN" / "UP" (SELECT switch), "NEXT_DOWN" / "NEXT_UP" (NEXT switch),
+// or null for anything else.
+const SWITCH_STATES = new Set(["DOWN", "UP", "NEXT_DOWN", "NEXT_UP"]);
+
 export function parseSwitchMessage(data) {
   try {
     const msg = typeof data === "string" ? JSON.parse(data) : data;
-    return msg && (msg.state === "DOWN" || msg.state === "UP") ? msg.state : null;
+    return msg && SWITCH_STATES.has(msg.state) ? msg.state : null;
   } catch {
     return null;
   }
@@ -221,6 +281,18 @@ export function isTextEntry(target) {
 }
 
 export function scanSpaceAction({ active, guidedOpen, code, repeat, target }) {
-  if (!active || guidedOpen || code !== "Space" || isTextEntry(target)) return "pass";
-  return repeat ? "block" : "press";          // holding Space down is ONE press
+  const action = scanKeyAction({ active, guidedOpen, code, repeat, target, switches: 1 });
+  return action === "select" ? "press" : action;
+}
+
+// All scanning keys: Space = SELECT; with 2 switches also Enter and → = NEXT (the wireless
+// ESP32 switch types Space and Enter). Same rules as Space above. Returns "select", "next",
+// "block" (a held key repeating: swallow it) or "pass" (leave the key alone).
+const NEXT_KEYS = new Set(["Enter", "NumpadEnter", "ArrowRight"]);
+
+export function scanKeyAction({ active, guidedOpen, code, repeat, target, switches = 1 }) {
+  if (!active || guidedOpen || isTextEntry(target)) return "pass";
+  const action = code === "Space" ? "select" : switches === 2 && NEXT_KEYS.has(code) ? "next" : null;
+  if (!action) return "pass";
+  return repeat ? "block" : action;           // holding a key down is ONE press
 }

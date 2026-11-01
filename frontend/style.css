@@ -354,6 +354,11 @@ textarea.composed-box:focus-visible { outline: 3px solid var(--accent); outline-
 }
 .scan-row.predictions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .scan-row.controls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* 2-switch step scan: one more column for ↩ ROWS, always in the last column */
+.scan-grid.step .scan-row { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.scan-grid.step .scan-row.predictions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.scan-grid.step .scan-row.controls { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.scan-cell.back { grid-column: -2 / -1; font-size: clamp(14px, 1.6vw, 20px); border-style: dashed; }
 .scan-cell {
   display: flex;
   align-items: center;
@@ -395,6 +400,7 @@ textarea.composed-box:focus-visible { outline: 3px solid var(--accent); outline-
 
 .scan-settings { margin-top: var(--space-3); }
 .scan-settings summary { cursor: pointer; font-weight: 600; min-height: var(--target); display: flex; align-items: center; }
+.scan-settings label[hidden] { display: none; }
 .scan-settings label { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-2) 0; }
 .scan-settings input[type="range"] { width: min(260px, 100%); accent-color: var(--accent); }
 .scan-settings output { font-variant-numeric: tabular-nums; min-width: 5ch; }

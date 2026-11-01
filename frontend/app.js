@@ -7,7 +7,7 @@ import { emptySentence, pointerKey, choosePrediction, typed, textBoxKeyAction, i
          inputMethod } from "./compose.js";
 import { metricsLines, moreSimilarEngine, referenceLines } from "./metrics_format.js";
 import { Scanner, buildScanRows, applyScanSelection, normalizeScanSettings, SCAN_LIMITS,
-         parseSwitchMessage, switchPillText, scanSpaceAction, isTextEntry } from "./scanning.js";
+         parseSwitchMessage, switchPillText, scanKeyAction, scanModeFor, isTextEntry } from "./scanning.js";
 import { mixToMono, convertForUpload, waveformPeaks, speechChunks, speechSecondsInRange,
          hasAllowedExtension } from "./audio_prep.js";
 import { usesIndianLanguage, compareEngines, previewEngine, generatingMessage,
@@ -614,7 +614,7 @@ const scan = {
   clickCtx: null,         // AudioContext for the optional click sound
 };
 const scanner = new Scanner({ stepMs: scan.settings.stepMs, startDelayMs: scan.settings.startDelayMs,
-                              rows: buildScanRows(suggestions) });
+                              rows: buildScanRows(suggestions), mode: scanModeFor(scan.settings.switches) });
 
 function loadScanSettings() {
   try { return normalizeScanSettings(JSON.parse(localStorage.getItem(SCAN_SETTINGS_KEY))); }
@@ -628,14 +628,15 @@ function saveScanSettings() {
 
 // The grid is built once; each step only changes classes.
 function buildScanGrid() {
-  scanEl("scanGrid").replaceChildren(...scanner.rows.map((row, r) => {
+  const rows = scanner.displayRows();
+  scanEl("scanGrid").replaceChildren(...rows.map((row, r) => {
     const rowEl = document.createElement("div");
     rowEl.className = "scan-row";
     if (r === 0) rowEl.classList.add("predictions");
-    if (r === scanner.rows.length - 1) rowEl.classList.add("controls");
-    rowEl.append(...row.map(() => {
+    if (r === rows.length - 1) rowEl.classList.add("controls");
+    rowEl.append(...row.map((cell) => {
       const cellEl = document.createElement("div");
-      cellEl.className = "scan-cell";
+      cellEl.className = cell.kind === "back" ? "scan-cell back" : "scan-cell";
       return cellEl;
     }));
     return rowEl;
@@ -646,7 +647,8 @@ function buildScanGrid() {
 function renderScan() {
   const view = scanner.view();
   const rowEls = scanEl("scanGrid").children;
-  scanner.rows.forEach((row, r) => {
+  const step = view.mode === "step";
+  scanner.displayRows().forEach((row, r) => {
     const rowEl = rowEls[r];
     if (!rowEl) return;
     rowEl.classList.toggle("is-active", view.phase === "rows" && view.row === r);
@@ -660,11 +662,13 @@ function renderScan() {
     });
   });
   scanEl("scanGrid").classList.toggle("paused", view.paused);
+  scanEl("scanGrid").classList.toggle("step", step);
   scanEl("scanState").textContent =
     view.paused ? (scan.speechPaused && !scan.userPaused ? scan.progressText || "Paused while speaking…" : "Paused")
     : view.phase === "waiting" ? "Get ready…"
-    : view.phase === "rows" ? "Press on the row you want"
-    : view.phase === "cols" ? "Press on the letter you want" : "";
+    : view.phase === "rows" ? (step ? "NEXT moves to another row, SELECT picks it" : "Press on the row you want")
+    : view.phase === "cols" ? (step ? "NEXT moves along, SELECT picks (↩ ROWS goes back)" : "Press on the letter you want")
+    : "";
 }
 
 // new predictions: same rows, new phrases in row 0
@@ -678,9 +682,7 @@ function setScanningMode(on) {
   scanEl("scanPanel").hidden = !on;
   scanEl("cameraWrap").hidden = on;
   scanEl("startCamBtn").hidden = on;
-  scanEl("inputHint").textContent = on
-    ? "Press the switch (or Space) when your row lights up, then again on the letter. " +
-      "If you miss, the rows start again."
+  scanEl("inputHint").textContent = on ? scanHintText()
     : "Hold the pointer still on a letter until the ring fills up.";
   clearInterval(scan.timer);
   if (!on) { scanner.stop(); disconnectSwitch(); updateScanFocusHint(); return; }
@@ -695,6 +697,15 @@ function setScanningMode(on) {
   focusScanGrid();                            // e.g. off the Input dropdown that was just used
 }
 
+// How to use scanning, for the hint under the Input selector.
+function scanHintText() {
+  return scan.settings.switches === 2
+    ? "Two switches: NEXT (or Enter / →) moves the light one step, SELECT (or Space) picks. " +
+      "Nothing moves by itself. ↩ ROWS at the end of a row goes back to the rows."
+    : "Press the switch (or Space) when your row lights up, then again on the letter. " +
+      "If you miss, the rows start again.";
+}
+
 function scanTick() {
   if (!scanner.tick(performance.now())) return;
   const phase = scanner.view().phase;
@@ -702,11 +713,18 @@ function scanTick() {
   renderScan();
 }
 
-// Every input (switch, spacebar) ends up here.
+// Every SELECT (switch, spacebar) ends up here.
 function handleSelect() {
   if (!scan.active) return;
   const result = scanner.press(performance.now());
   if (result?.type === "cell") runScanCell(result.cell);
+  renderScan();
+}
+
+// Every NEXT (second switch, Enter, →) ends up here. Only moves in 2-switch step scan.
+function handleNext() {
+  if (!scan.active || !scanner.next(performance.now())) return;
+  playScanClick();
   renderScan();
 }
 
@@ -774,7 +792,10 @@ scanEl("scanPauseBtn").onclick = () => {
 
 // settings panel (caregiver)
 function showScanSettings() {
-  const { stepMs, startDelayMs, clickSound } = scan.settings;
+  const { stepMs, startDelayMs, clickSound, switches } = scan.settings;
+  scanEl("scanSwitches").value = String(switches);
+  // speed and pause only matter when the light moves by itself (1 switch)
+  for (const el of document.querySelectorAll(".scan-settings .auto-only")) el.hidden = switches === 2;
   scanEl("scanSpeed").value = stepMs;
   scanEl("scanSpeedOut").textContent = `${(stepMs / 1000).toFixed(1)} s`;
   scanEl("scanDelay").value = startDelayMs;
@@ -790,6 +811,17 @@ function changeScanSettings(changes) {
   showScanSettings();
 }
 
+// 1 or 2 switches: restart scanning from the top in the new mode, with ↩ ROWS cells for 2.
+scanEl("scanSwitches").onchange = () => {
+  changeScanSettings({ switches: Number(scanEl("scanSwitches").value) });
+  scanner.setMode(scanModeFor(scan.settings.switches), performance.now());
+  if (scan.active) {
+    buildScanGrid();
+    scanEl("inputHint").textContent = scanHintText();
+    focusScanGrid();                      // off the dropdown, so Space/Enter go to scanning
+  }
+};
+
 for (const [id, key] of [["scanSpeed", "stepMs"], ["scanDelay", "startDelayMs"]]) {
   scanEl(id).min = SCAN_LIMITS[key].min;
   scanEl(id).max = SCAN_LIMITS[key].max;
@@ -801,8 +833,8 @@ scanEl("scanClick").onchange = () => {
 };
 showScanSettings();
 
-// Hardware switch: the backend reads the Arduino and sends {"state": "DOWN"|"UP"} over /ws/switch.
-// Only DOWN selects. Dropped connection (backend restarted) -> try again every 2 s.
+// Hardware switch: the backend reads the Arduino and sends {"state": "DOWN"|"UP"|"NEXT_DOWN"|"NEXT_UP"}
+// over /ws/switch. DOWN = SELECT, NEXT_DOWN = NEXT. Dropped connection -> try again every 2 s.
 const switchLink = { socket: null, open: false, retryTimer: null, statusTimer: null, status: null };
 
 function connectSwitch() {
@@ -811,7 +843,11 @@ function connectSwitch() {
   const socket = new WebSocket(`${protocol}://${location.host}/ws/switch`);
   switchLink.socket = socket;
   socket.onopen = () => { switchLink.open = true; refreshSwitchStatus(); };
-  socket.onmessage = (e) => { if (parseSwitchMessage(e.data) === "DOWN") handleSelect(); };
+  socket.onmessage = (e) => {
+    const state = parseSwitchMessage(e.data);
+    if (state === "DOWN") handleSelect();
+    else if (state === "NEXT_DOWN") handleNext();
+  };
   socket.onclose = () => {
     if (switchLink.socket !== socket) return;           // an old socket we closed on purpose
     switchLink.socket = null;
@@ -852,22 +888,24 @@ function renderSwitchPill() {
   pill.title = switchLink.status?.error || "";           // why it isn't connected, for the caregiver
 }
 
-// Spacebar = the switch (a real key, or twitch_to_space.py pressing it). Listened for on the
-// whole document in the CAPTURE phase, so it works whatever control has focus (rules in
-// scanning.js scanSpaceAction). Buttons "click" on Space keyup, so keyup is blocked too.
-function scanSpace(e) {
-  return scanSpaceAction({ active: scan.active, guidedOpen: !document.getElementById("guidedPanel").hidden,
-                           code: e.code, repeat: e.repeat, target: e.target });
+// Space = SELECT, and with 2 switches Enter / → = NEXT (real keys, twitch_to_space.py, or the
+// wireless ESP32 switch typing them). Listened for on the whole document in the CAPTURE phase,
+// so it works whatever control has focus (rules in scanning.js scanKeyAction). Buttons "click"
+// on Space keyup and on Enter keydown, so both are blocked.
+function scanKey(e) {
+  return scanKeyAction({ active: scan.active, guidedOpen: !document.getElementById("guidedPanel").hidden,
+                         code: e.code, repeat: e.repeat, target: e.target, switches: scan.settings.switches });
 }
 document.addEventListener("keydown", (e) => {
-  const action = scanSpace(e);
+  const action = scanKey(e);
   if (action === "pass") return;
   e.preventDefault();                     // no select opening, no button click, no scroll
   e.stopPropagation();
-  if (action === "press") handleSelect();
+  if (action === "select") handleSelect();
+  else if (action === "next") handleNext();
 }, true);
 document.addEventListener("keyup", (e) => {
-  if (scanSpace(e) === "pass") return;
+  if (scanKey(e) === "pass") return;
   e.preventDefault();
   e.stopPropagation();
 }, true);

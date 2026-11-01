@@ -174,17 +174,20 @@ test("speed and start delay changes apply from the next step", () => {
 });
 
 test("settings are clamped and default safely", () => {
-  assert.deepEqual(normalizeScanSettings(null), { stepMs: 1000, startDelayMs: 1500, clickSound: false });
+  assert.deepEqual(normalizeScanSettings(null), { stepMs: 1000, startDelayMs: 1500, clickSound: false, switches: 1 });
   assert.deepEqual(normalizeScanSettings({ stepMs: 50, startDelayMs: 99999, clickSound: true }),
-                   { stepMs: 400, startDelayMs: 5000, clickSound: true });
+                   { stepMs: 400, startDelayMs: 5000, clickSound: true, switches: 1 });
   assert.deepEqual(normalizeScanSettings({ stepMs: "abc", startDelayMs: "800", clickSound: "yes" }),
-                   { stepMs: 1000, startDelayMs: 800, clickSound: false });
+                   { stepMs: 1000, startDelayMs: 800, clickSound: false, switches: 1 });
   assert.equal(normalizeScanSettings({ stepMs: 2600 }).stepMs, 2500);
 });
 
-test("switch messages: only DOWN / UP", () => {
+test("switch messages: DOWN / UP (SELECT) and NEXT_DOWN / NEXT_UP (NEXT) only", () => {
   assert.equal(parseSwitchMessage('{"state":"DOWN","t":1.5}'), "DOWN");
   assert.equal(parseSwitchMessage('{"state":"UP","t":1.5}'), "UP");
+  assert.equal(parseSwitchMessage('{"state":"NEXT_DOWN","t":1.5}'), "NEXT_DOWN");
+  assert.equal(parseSwitchMessage('{"state":"NEXT_UP","t":1.5}'), "NEXT_UP");
+  assert.equal(parseSwitchMessage('{"state":"NEXT"}'), null);
   assert.equal(parseSwitchMessage('{"state":"down"}'), null);
   assert.equal(parseSwitchMessage("not json"), null);
   assert.equal(parseSwitchMessage("null"), null);
