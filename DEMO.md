@@ -33,6 +33,16 @@ Commands run in PowerShell from the `backend` folder, always with `py -3.10`.
    The log records these sentences as `scanning`.
 5. Show **Scanning settings**: slower steps for a tired patient, optional click sound.
 
+## Caregiver PIN (1 minute)
+
+1. "A cloned voice can be misused, so the recordings are behind a caregiver PIN." Point at
+   the indicator: **Recordings locked**.
+2. Press **SPEAK** (or a prediction): it speaks at once. The patient never needs the PIN.
+3. Open **Guided voice banking**: the PIN dialog appears. Type a wrong PIN once ("4 attempts
+   left before a 5-minute lockout"), then the right one: *Recordings unlocked · 15 min*.
+4. **Audit log**: the wrong attempt and the unlock are listed, with no PIN in it.
+5. **Lock now**: the panel closes and the indicator says locked again.
+
 ## IR switches: wristband (2 switches) or glasses (1 switch)
 
 Build, wiring, tuning and the "when the sensors arrive" checklist: `hardware/HARDWARE.md`.

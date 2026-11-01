@@ -337,6 +337,43 @@ directly comparable. It isn't counted as a patient sentence in the selection evi
 request and through the website's own code, and prints both similarity scores side by side,
 plus what the website sends for that real user right now.
 
+## Caregiver PIN: protecting the voice recordings
+
+A cloned voice can be **misused**: anyone with a few seconds of someone's recordings can
+make them "say" things they never said (fraud calls, fake voice messages). The person (or
+their family/legal guardian) consented to *ReVoice* using their voice, not to anyone at the
+computer copying it. So each user's recordings sit behind a **caregiver PIN**.
+
+**What needs the PIN** (per user): listing, playing or downloading recordings; recording or
+uploading clips; guided voice banking; the dataset export; deleting clips or the user; the
+audit log.
+
+**What never needs it**: speaking (`/speak`), predictions, scanning and the switches, choosing
+the user. The patient must always be able to talk. (The number of clips, and the clip names
+shown under a generated sentence, are not protected: they contain no audio.)
+
+**How it works**
+- A 4–6 digit PIN is chosen when the user is added (*Add user → Caregiver PIN*, typed twice).
+  Users created before this get "Set a caregiver PIN" the first time someone opens their
+  recordings.
+- The PIN is **never stored**: only a salted **PBKDF2-SHA256** hash (200 000 rounds, random
+  salt per user) in `profile.json`. The page never receives the hash.
+- A correct PIN gives a random session token, kept only in memory (server and page). It ends
+  after **15 minutes without use** (each use restarts the 15 minutes), with **Lock now**, when
+  the PIN is changed, or when the server restarts. Reloading the page also locks.
+- **5 wrong PINs** in a row lock that user for **5 minutes** (also when changing the PIN).
+- Changing the PIN needs the current PIN (*Change PIN* in the user bar).
+- **Audit log** (`backend/data/audit_log.csv`, *Audit log* button behind the PIN): time, user,
+  action, allowed or not, and why not (wrong PIN, locked, no PIN yet). It never contains a PIN,
+  a token or any audio.
+- The indicator in the user bar shows *Recordings unlocked · 14 min*, *locked*, *locked out ·
+  4:32* or *No caregiver PIN yet*.
+
+**Limits (worth saying in the review):** the recordings on disk are still unencrypted, so the
+PIN protects them through ReVoice, not from someone with access to the computer's files; the
+lockout and sessions are in memory, so restarting the server clears a lockout; anyone at the
+computer can set a PIN on an *older* user that has none (the first-time prompt).
+
 ## Evidence for the report
 
 - **Selection counter** (under the composed text): pointer selections used for the
@@ -372,7 +409,8 @@ plus what the website sends for that real user right now.
 ## Known limitations (honest, worth mentioning in the report)
 
 - **Recordings are stored unencrypted** in `backend/data/` on this computer (never in git).
-  Fine for a prototype; a real product would encrypt them.
+  The caregiver PIN protects them inside ReVoice, not on disk; a real product would encrypt
+  them (e.g. with a key derived from the PIN).
 - **Laser detection needs decent lighting and a bright red dot** — red clothing or very
   bright rooms can confuse simple colour thresholding.
 - **The EMG threshold is per person and per pad placement.** Re-run

@@ -172,6 +172,21 @@ backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select
                          converted_text; output accent dropped for non-English. Log columns
                          language, text_mode, original_text, converted_text (text ONLY for
                          Indian-language rows). GET /indic/languages.
+            caregiver_pin.py  PIN 4-6 ASCII digits, PBKDF2-SHA256 200k rounds + salt in profile.json
+                         "pin" (store.get() pops it -> pin_set). PinGuard (in memory): tokens
+                         (X-ReVoice-Token, 15 min IDLE, use() refreshes), 5 wrong -> 429 locked_out
+                         5 min, lock_profile/forget_profile. AccessDenied(status, code) codes:
+                         locked 401, pin_not_set 403, wrong_pin 401 (attempts_left), locked_out 429
+                         (retry_after), bad_pin 400. audit() -> data/audit_log.csv (timestamp,
+                         profile_id, action, allowed, detail), never PIN/token/audio.
+                         app.require_unlocked(profile, token, action) on: uploads GET/POST/DELETE,
+                         upload_voice_clip, guided status/record/skip/audio/references POST+DELETE,
+                         export, audit, DELETE profile (test_pin checks the EXACT list). NOT on
+                         /speak, /predict, switch, select, /voice_bank counts, /voice_bank/references.
+                         PIN check before upload validation. unlock/pin/create are plain def.
+                         conftest: check OFF by default (old tests), pin_on fixture = real check.
+                         Frontend pin.js PURE + app.js protectedFetch (prompt once, retry;
+                         prompt:false for background) ; audio/export fetched as blobs.
             predictor.py Gemini prompt, reply parsing, offline fallback, is_sensible()
             tests/       pytest; Colab + Gemini always mocked, real network calls fail;
                          each test gets a temporary data folder (never touches backend/data)
@@ -258,6 +273,7 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
       Caregiver Validation (Confirm / Escalate / Override, toggleable)
 - [~] 5 Scanning mode + single switch: DONE spacebar + Arduino EMG via backend serial bridge
       (hardware/switch_emg.ino, tag `scanning-working`). Not done: blink/eyebrow, TCRT5000.
+- [x] Final review Phase 3 caregiver PIN (tag pre-pin): backend + frontend + docs, tested.
 - [~] Final review Phase 2 hardware switches (tag pre-hardware2): hardware/switch_ir (Uno),
       hardware/switch_esp32_ble (ESP32 core 3.3.12 + T-vK BleKeyboard 0.3.2 + NimBLE-Arduino 1.4.3,
       -DUSE_NIMBLE), 2-switch step scan, docs hardware/HARDWARE.md. Compiled, not yet run on
