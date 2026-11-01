@@ -14,7 +14,7 @@ revoice/
 ├── hardware/
 │   └── switch_emg.ino   Arduino sketch: EMG muscle sensor -> single switch ("DOWN"/"UP")
 └── colab/
-    ├── revoice_server_v2.ipynb   the voice server (XTTS-v2 + F5-TTS) — the ONLY one to use
+    ├── revoice_server_v2.ipynb   the voice server (XTTS-v2 + F5-TTS + IndicF5) — the ONLY one to use
     ├── indicf5_test.ipynb        test only: Hindi (IndicF5) next to XTTS/F5 without breaking them
     └── archive/                  old notebooks — do NOT run these
 ```
@@ -35,8 +35,10 @@ revoice/
    app's reference clips are the problem.
    Step 3c loads two small models that only MEASURE results (speaker similarity and an
    English accent estimate).
+   Optional: **Step 3d** sets up IndicF5 for Indian languages (see
+   [Indian languages (IndicF5)](#indian-languages-indicf5); needs a one-time Hugging Face token).
 6. Paste your ngrok token (https://dashboard.ngrok.com/get-started/your-authtoken) in Step 5.
-7. Run Step 6. The last line must say **ReVoice API v8**.
+7. Run Step 6. The last line must say **ReVoice API v9** and lists the loaded engines.
 
 Last checked on Colab with **Python 3.13 and torch 2.11** (November 2026): the install and
 version checks pass with the pinned versions unchanged.
@@ -106,6 +108,7 @@ node --test "frontend/tests/*.test.mjs"
      .webm clips and the Colab fine-tuning notebook converts them.
 6. Pick a voice engine — **F5-TTS** (default), **XTTS-v2**, or **Compare both** (generates with
    each, one after the other, and shows how long each took) — then **Generate & Speak**.
+   For Hindi, Tamil and 9 more languages pick **IndicF5** (next section).
 7. **Typing** (caregivers, testing, or a user who can still type): the composed sentence is
    also a text box. Typing and pointing edit the SAME sentence: typing changes it, pointer
    letters are added at the end, a prediction (on the camera overlay, or as a button under
@@ -118,6 +121,55 @@ node --test "frontend/tests/*.test.mjs"
    `keyboard`/`mixed` so it never counts in the savings summary.
 8. **Scanning (single switch)**, for someone who can't point: set **Input** to
    *Scanning (single switch)* — see the next section.
+
+## Indian languages (IndicF5)
+
+**IndicF5** (AI4Bharat's F5-TTS fine-tune) speaks **Assamese, Bengali, Gujarati, Hindi,
+Kannada, Malayalam, Marathi, Odia, Punjabi, Tamil and Telugu** in the person's own voice.
+It is **cross-lingual**: an **English** recording is enough to speak Hindi in that voice,
+which matters for someone who can no longer record anything new.
+
+**One-time setup (IndicF5 is gated on Hugging Face):**
+1. Log in at https://huggingface.co, open https://huggingface.co/ai4bharat/IndicF5 and
+   **accept the terms**.
+2. https://huggingface.co/settings/tokens → **Create new token** → type **Read** → copy it.
+3. In Colab: **key icon** (left bar) → **Add new secret** → name `HF_TOKEN`, value = the
+   token, switch **Notebook access** on.
+4. Run **Step 3d** (downloads ~1.4 GB), then Steps 4a and 6 as usual. Step 6's reply shows
+   `"indicf5": "ready (loads on the first request)"`. If 3d fails, XTTS and F5 still work.
+
+**Using it (caregiver settings under Speak):**
+- **Voice engine → IndicF5 (Indian languages)**, choose the **Language** (by name), and say
+  what the typed text is:
+  - *the language in English letters* → **transliterate** (`main paani chahta hoon` →
+    `मैं पानी चाहता हूँ`)
+  - *English, translate it* → **translate** (`I need water` → `मुझे पानी चाहिए`)
+- Predictions stay in English; the patient composes and presses SPEAK exactly as before
+  (pointer, scanning or switch). Gemini converts the sentence just before speaking and the
+  page shows the result **above the player**, so the caregiver can check what was said.
+- Text already typed in the language's script is spoken as typed (no Gemini needed).
+  **Without a Gemini key, English is refused** with a clear message: it is never read out
+  by IndicF5 as if it were Hindi.
+- Each sentence takes **about 15–20 s** on the free T4 (the page says "Generating in Hindi…
+  about 15 s"); the very first one also loads the model. Other requests (predictions,
+  scanning, the switch) keep working meanwhile.
+- **Compare IndicF5 vs F5** speaks the same converted sentence with both (plain F5 was not
+  trained on Indian scripts, so this shows why IndicF5 is needed).
+- The English accent estimate is not shown for Indian-language speech (the accent model
+  only knows English accents); voice similarity, pitch and rate are.
+
+**How the duration is set** (the fix found in `colab/indicf5_test.ipynb` Step T7): F5's own
+length guess counts UTF-8 *bytes*; an Indian letter is 3 bytes and an English one 1, so with an
+English reference the Hindi got ~3× too much time and started with 2–3 s of mumbling.
+ReVoice instead counts **syllables** (vowel letters and vowel signs, per script) at about
+5 per second plus short pauses at punctuation, kept between 1 and 20 s
+(`backend/indic_languages.py`, copied into Step 3d). Measured on Hindi: no garbled start,
+character error rate 0.00, similarity 0.78. Other languages use the same rule but were not
+measured yet.
+
+**Consent:** speaking a language the person never recorded is still their voice. Only use
+it with the same consent as voice banking (the person, or their family/legal guardian), and
+tell listeners that the speech is generated.
 
 ## Single switch: scanning mode
 
@@ -275,7 +327,9 @@ plus what the website sends for that real user right now.
   `backend/data/generation_log.csv` (time, engine, emotion, voice source, text length in
   characters and words, generation time, success/failure, selection counts, and which
   reference clips were sent: setting, file names + lengths, total length, and F5's
-  transcript of its reference). The sentence itself is not stored.
+  transcript of its reference). English sentences are not stored. For Indian languages the
+  row also has the language, the mode (transliterate / translate / as typed), the typed
+  text and the converted text, so a wrong conversion can be checked.
 - **Voice metrics** (under each player, measured on Colab for every sentence):
   *similarity* to the real voice (speaker-embedding cosine, 0-1, higher = more alike),
   average *pitch* and range, *speaking rate* (words per second of actual speech), for the
@@ -305,7 +359,10 @@ plus what the website sends for that real user right now.
 - **The EMG threshold is per person and per pad placement.** Re-run
   `tools/emg_calibrate.py` whenever the pads are moved; sweat or loose pads cause false
   triggers or missed twitches.
-- **Colab free tier disconnects** after inactivity; re-run Steps 3, 3b, 3c, 4a, 5 and 6.
+- **Colab free tier disconnects** after inactivity; re-run Steps 3, 3b, 3c, 3d, 4a, 5 and 6.
+- **IndicF5 is slow on the free T4** (~15–20 s a sentence, at 32 steps) and its duration
+  rule was only measured on Hindi. Translations come from Gemini and can be wrong: the
+  converted text is shown so a caregiver can check it.
 - **F5-TTS uses one reference clip** (the longest, trimmed to 12 s or less at a pause) plus a
   Whisper transcript of it, shown under the F5 player. If the transcript is wrong, F5's
   output suffers: re-record that clip more clearly.
@@ -314,3 +371,4 @@ plus what the website sends for that real user right now.
 - **F5-TTS model weights are released for non-commercial use only** (fine for a college
   project, not for a product).
 - XTTS-v2 is under the Coqui Public Model License (also non-commercial).
+- **IndicF5** weights (AI4Bharat, gated on Hugging Face) are also for non-commercial use.

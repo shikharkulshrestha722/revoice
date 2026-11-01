@@ -58,6 +58,12 @@ frontend/   index.html, style.css
                          input_method.
             audio_checks.js PURE: analyzeLevels() flags too_quiet / clipping using the
                          90th-percentile 10 ms chunk RMS (a start click can't hide a quiet take)
+            indic.js     PURE: IndicF5 choices (indicf5 | compare_indic -> ["indicf5","f5"]),
+                         previewEngine, generatingMessage ("Generating in Hindi… about 15 s",
+                         +5 s per 40 chars over 80), convertedLabel. app.js: language select
+                         from GET /indic/languages + "typed text is" radios (localStorage
+                         revoice.indic), #convertedBox above the player; compare sends F5 the
+                         converted_text IndicF5 spoke; scan.progressText shows while scanning waits.
             scanning.js PURE: single-switch row-column Scanner (time passed in: start/tick/
                          press/setPaused/setRows/view), buildScanRows (row 0 = 3 predictions,
                          letters by frequency 7/row, controls SPACE/DEL/SPEAK/CLEAR),
@@ -139,11 +145,24 @@ backend/    app.py       FastAPI: GET/POST /profiles, POST /profiles/{id}/select
                          (port detect, busy/missing messages, arduino-cli at C:\Program Files                         Arduino CLI; sketch staged into <name>/<name>.ino). Option A
                          (twitch_to_space, SWITCH_SERIAL_PORT empty) XOR option B (bridge).
                          conftest refuses real serial.Serial. /speak input_method also "scanning".
+            indic_languages.py  IndicF5's 11 languages (code -> name, script). SHARED BLOCK
+                         (copied verbatim into Colab Step 3d; test enforces): count_syllables per
+                         script (common ISCII layout of the 9 Unicode blocks; virama joins; final
+                         'a' dropped in Devanagari/Bengali/Gurmukhi/Gujarati), 5 syl/s + pauses,
+                         clamp 1-20 s, ratio fallback in CHARACTERS not bytes. convert_text():
+                         already in script -> as_typed; else Gemini strict prompt (transliterate |
+                         translate) and the reply must be in the script; no Gemini -> ConversionError
+                         (English is never sent to IndicF5).
+                         /speak: language, text_mode, converted_text (compare reuses it, no 2nd
+                         Gemini call); indicf5 gets one clip like F5, 300 s timeout; reply adds
+                         converted_text; output accent dropped for non-English. Log columns
+                         language, text_mode, original_text, converted_text (text ONLY for
+                         Indian-language rows). GET /indic/languages.
             predictor.py Gemini prompt, reply parsing, offline fallback, is_sensible()
             tests/       pytest; Colab + Gemini always mocked, real network calls fail;
                          each test gets a temporary data folder (never touches backend/data)
             data/        user data (gitignored). Override location with REVOICE_DATA_DIR.
-colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice API v6":
+colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice API v9";
                                       /synthesize with clips or stock_speaker, /speakers,
                                       /forget_voices). Step 4a = voice functions
                                       (synthesize_core), shared by the Step 4b self-test and
@@ -162,6 +181,13 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
                                       every metric is None on failure. speechbrain 1.1.1 is
                                       installed --no-deps before the final pin line. Audio is
                                       loaded with librosa at 16 kHz (no torchaudio file IO).
+                                      v9: Step 3d (after 3c) = IndicF5: downloads with the
+                                      HF_TOKEN secret, loads on the FIRST request (lock), method B
+                                      (CFM+DiT v0 built like load_model, float32, own vocoder
+                                      weights). run_indicf5: F5's reference + English Whisper
+                                      transcript (shared f5_cache), fix_duration =
+                                      indicf5_total_seconds, nfe 32, peak -1 dBFS. generate()
+                                      has an "indicf5" branch; health lists engines.
             indicf5_test.ipynb        IndicF5 (Hindi etc.) TEST only, server notebook untouched: runs
                                       Steps 1-4a unchanged, loads IndicF5 weights with our f5-tts 1.1.22
                                       (method B = direct safetensors load; method A AutoModel fails with
@@ -211,6 +237,8 @@ colab/      revoice_server_v2.ipynb   THE ONLY VALID server notebook ("ReVoice A
 - [x] Part A stability (Colab v6/v7 + metrics), F5 default — tag `review-safe` on main
 - [ ] Part B upload old recordings — branch `upload-recordings` (merge after manual test)
 - [ ] Part C light XTTS fine-tune
+- [~] Final review Phase 1 IndicF5 (tag pre-indicf5): 1a safety test + T7 done; 1b-1e
+      (Step 3d, backend, frontend, tests, docs) done, waiting for the Colab manual test
 - [ ] 3 Fine-tune XTTS (colab/finetune_xtts.ipynb, checkpoints to Drive, engine "xtts_ft")
 - [ ] 4 Safety layer: Emergency Override, False Selection Guard, Ambiguous Phrase Check,
       Caregiver Validation (Confirm / Escalate / Override, toggleable)

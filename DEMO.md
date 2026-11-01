@@ -1,4 +1,4 @@
-# ReVoice — Demo checklist: finger-twitch switch + scanning
+# ReVoice — Demo checklist: finger-twitch switch + scanning (+ Indian languages)
 
 A short script for showing scanning mode, with a plan B if the hardware fails.
 Commands run in PowerShell from the `backend` folder, always with `py -3.10`.
@@ -32,6 +32,28 @@ Commands run in PowerShell from the `backend` folder, always with `py -3.10`.
 4. Select **SPEAK**: scanning shows "Paused while speaking…" and resumes after the audio.
    The log records these sentences as `scanning`.
 5. Show **Scanning settings**: slower steps for a tired patient, optional click sound.
+
+## Indian languages: IndicF5 (2 minutes)
+
+Before: `HF_TOKEN` secret in Colab and **Step 3d** run (see README, "Indian languages");
+`GEMINI_API_KEY` in `backend/.env`. Make one Hindi sentence before the audience arrives, so
+the model is already loaded (the first one takes longer).
+
+1. Explain: "Her voice was recorded in English. She also speaks Hindi at home."
+2. Under **Speak**: engine **IndicF5 (Indian languages)**, Language **Hindi**,
+   *Typed text is* → **English, translate it**.
+3. Compose **I need water** (pointer, scanning or a prediction) and press SPEAK.
+   The status says "Generating in Hindi… about 15 s"; scanning waits as usual.
+4. Point at the Hindi text above the player (मुझे पानी चाहिए।): this is exactly what was
+   spoken, so a caregiver can check the translation. Similarity to her real voice is below.
+5. Switch to **the language in English letters** and type `main thik hoon`: transliterated,
+   not translated.
+6. **Compare IndicF5 vs F5**: the same Hindi sentence through plain F5, which was never
+   trained on Hindi, to show why IndicF5 is needed.
+
+Plan B: if IndicF5 isn't set up or Colab is slow, show the Hindi text from a previous run in
+the generation log (`converted_text` column) and play a saved recording. No Gemini key →
+type the sentence in Devanagari (e.g. `मुझे पानी चाहिए`) and it is spoken as typed.
 
 ## Plan B: hardware fails
 
